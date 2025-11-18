@@ -32,9 +32,9 @@ class SoftArmObstacle2DPyEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
-        self.arm.apply_action(dx=action[0]*10.0,
-                              dkappa=action[1:]*0.1)
-        print("Action applied:", action)
+        self.arm.apply_action(dx=action[0]*1.0,
+                              dkappa=action[1:]*0.01)
+        # print("Action applied:", action)
 
         # 3. 渲染（可选，只在 human 模式）
         if self.render_mode == "human":

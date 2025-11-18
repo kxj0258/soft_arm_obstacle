@@ -59,8 +59,9 @@ class Renderer2D:
         k  = seg.kappa
         L  = seg.L        
 
-        if abs(k) < 0.1:          # 直线 → 用细线
-            self.ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=3)
+        if abs(k) < 0.01:          # 直线 → 用细线
+            self.ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=1)
+            print("Drawing line: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L)
             return
         
         # 1. 段间切线连续：本段起始角 = 前段末端方向（世界系）
@@ -101,7 +102,7 @@ class Renderer2D:
         arc = Arc(center, 2 * r, 2 * r,
                   theta1=np.degrees(start_angle),
                   theta2=np.degrees(start_angle + sweep),
-                  color='steelblue', lw=3)
+                  color='steelblue', lw=1)
         
         self.arcs.append(self.ax.add_patch(arc))
 

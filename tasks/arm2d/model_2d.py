@@ -55,7 +55,9 @@ class ArmModel2D(ContinuumArm2D):
         """
         for i, dk in enumerate(dkappa):
             if i < self.n_free:
-                self.segs_free[i].kappa = np.clip(self.segs_free[i].kappa + dk, -3, 3)
+                print("Segment", i, "kappa before:", self.segs_free[i].kappa)
+                self.segs_free[i].kappa = np.clip(self.segs_free[i].kappa + dk, -1, 1)
+                print("Segment", i, "kappa after:", self.segs_free[i].kappa)
 
         self.T_free = self.fk_free()               # 重新 FK
 
@@ -115,10 +117,15 @@ class ArmModel2D(ContinuumArm2D):
         k_new_front = fit_kappa(p_start, p_col, L1)
         # 符号：保持与原来同向（可再细调）
         k_new_front = np.copysign(k_new_front, k_orig)
-        seg_front = PCCSeg2D(L1, k_new_front)
+        seg_front = PCCSeg2D(L1, k_new_front, p_start, seg.dir_start)
+
+        print("seg_front: L =", L1, "kappa =", k_new_front, "p_start =", p_start, "dir_start =", seg.dir_start)
 
         # ---- 3.3 后段：保持原 κ ----
-        seg_back = PCCSeg2D(L2, k_orig)
+        seg_back = PCCSeg2D(L2, k_orig, p_col, seg_front.dir_end)
+
+        print("seg_back: L =", L2, "kappa =", k_orig, "p_start =", p_col, "dir_start =", seg_front.dir_end)
+        
 
         # ---- 3.4 替换列表 ----
         self.segs_obs[i:i + 1] = [seg_front, seg_back]
@@ -190,84 +197,134 @@ def seg_circle_nearest(seg: 'PCCSeg2D',
         c   : 障碍圆心 (2,)
         r   : 障碍半径
     返回:
-        None
-        (nearest, normal, depth, col_point)
-            nearest  : 圆弧上距圆心最近点（世界坐标）
-            normal   : nearest → c 的单位向量
-            depth    : 穿透深度 (>0 表示相交)
-            col_point: 障碍圆上真正的碰撞点 = nearest + normal*depth
-            frac     : 碰撞点在圆弧段内的比例 0~1
+        
     """
-    # 1. 圆弧端点
+
+    # 1. 基本检查
     p_start = seg.p_start
-    p_end   = seg.p_end
+    p_end = seg.p_end
     if p_start is None or p_end is None:
         return None
 
-    # 2. 圆弧参数：总弦长、总扫角、半径、圆心
-    chord = p_end - p_start
-    chord_len = np.linalg.norm(chord)
     k = seg.kappa
-    if abs(k) < 0.1:                      # 退化直线，用旧线段逻辑
+    # 退化为直线段或未计算 center 的情况，回退到线段逻辑
+    if seg.center is None or abs(k) < 1e-6:
         return _line_circle_nearest(p_start, p_end, c, r)
 
-    total_ang = seg.L * k
-    R_arc = 1.0 / k
-    # 圆弧局部圆心（世界系）
-    # 局部坐标：起点 (0,0)，终点 (chord,0)，圆弧在 +y 侧
-    normal_dir = np.array([-chord[1], chord[0]])    # 90° 旋转
-    normal_dir /= np.linalg.norm(normal_dir) + 1e-12
-    # 局部圆心 → 世界圆心
-    if k > 0:
-        c_arc_local = normal_dir * R_arc
-    else:
-        c_arc_local = -normal_dir * R_arc
-    c_arc_world = p_start + c_arc_local
+    c_arc = seg.center
+    R = abs(1.0 / k)
+    eps = 1e-9
 
-    # 3. 最近点参数：把障碍圆心投影到圆弧所在圆
-    vec = c - c_arc_world
-    d_centers = np.linalg.norm(vec)
-    if d_centers > abs(R_arc) + r:       # 两圆相离
+    # 辅助：角度归一化与区间重叠判断
+    def _wrap(a):
+        return np.arctan2(np.sin(a), np.cos(a))
+
+    def _intervals_overlap(start1, end1, start2, end2):
+        # 将两个区间都映射到实数轴（end = start + length），尝试平移 2pi
+        if end1 < start1:
+            end1 += 2 * np.pi
+        if end2 < start2:
+            end2 += 2 * np.pi
+        # try shifts of second interval by -2pi, 0, +2pi
+        for shift in (-2 * np.pi, 0.0, 2 * np.pi):
+            s2 = start2 + shift
+            e2 = end2 + shift
+            if max(start1, s2) <= min(end1, e2) + 1e-12:
+                return True
+        return False
+
+    # 2. 先做端点检查（端点在障碍圆内即为碰撞）
+    d_start = np.linalg.norm(p_start - c)
+    d_end = np.linalg.norm(p_end - c)
+    if d_start <= r + eps or d_end <= r + eps:
+        # 优先选离障碍心最近的端点
+        if d_start <= d_end:
+            nearest = p_start.copy()
+            t_rel = 0.0
+        else:
+            nearest = p_end.copy()
+            t_rel = seg.L
+        dist = min(d_start, d_end)
+        if dist < 1e-12:
+            return None
+        normal = (c - nearest) / (dist + 1e-12)
+        depth = r - dist
+        col_point = nearest - normal * depth
+        # frac：端点比例
+        frac = 0.0 if d_start <= d_end else 1.0
+        return nearest, normal, depth, col_point, frac
+
+    # 3. 两圆几何关系
+    vec = c - c_arc
+    d = np.linalg.norm(vec)
+
+    # 快速排除：两圆没有交集且弧的端点也不在圆内
+    if d > R + r + eps:
         return None
-    # 投影方向
-    if d_centers < 1e-12:                # 两圆心重合
-        t = 0.0
+
+    # 中心重合处理
+    if d < eps:
+        # 若障碍圆覆盖整圆（r >= R），则任意弧点都处于障碍内，选起点
+        if r >= R - eps:
+            nearest = p_start.copy()
+            dist = np.linalg.norm(c - nearest)
+            if dist < 1e-12:
+                return None
+            normal = (c - nearest) / (dist + 1e-12)
+            depth = r - dist
+            col_point = nearest - normal * depth
+            frac = 0.0
+            return nearest, normal, depth, col_point, frac
+        else:
+            # 障碍圆在弧圆内部，不一定与弧相交（端点已检查），排除
+            return None
+
+    # 4. 计算整圆与障碍圆的交角区间（若有交点）
+    # cos_delta = (d^2 + R^2 - r^2) / (2*d*R)
+    cos_delta = (d * d + R * R - r * r) / (2.0 * d * R)
+    cos_delta = np.clip(cos_delta, -1.0, 1.0)
+    delta = np.arccos(cos_delta)
+    alpha0 = np.arctan2(vec[1], vec[0])
+    cover_start = _wrap(alpha0 - delta)
+    cover_end = _wrap(alpha0 + delta)
+
+    # 5. 弧角区间
+    ang_start = np.arctan2(p_start[1] - c_arc[1], p_start[0] - c_arc[0])
+    total_ang = seg.L * k
+    ang_end = ang_start + total_ang
+
+    # 判断整圆被覆盖情形（若 r >= d + R => 障碍圆覆盖整圆）
+    if r >= d + R - eps:
+        cover_start_full = ang_start - 2 * np.pi
+        cover_end_full = ang_start + 2 * np.pi
+        overlap = _intervals_overlap(ang_start, ang_end, cover_start_full, cover_end_full)
     else:
-        t = np.arctan2(vec[1], vec[0]) - np.arctan2(chord[1], chord[0])
-        # 归到 [-π, π]
-        t = np.arctan2(np.sin(t), np.cos(t))
+        overlap = _intervals_overlap(ang_start, ang_end, cover_start, cover_end)
 
-    # 4. 截断到圆弧实际扫角范围
-    t_min = 0.0
-    t_max = total_ang
-    t = np.clip(t, min(t_min, t_max), max(t_min, t_max))
+    # 如果没有角区间重合，则没有在弧上的交集（端点已检查过）
+    if not overlap:
+        return None
 
-    # 5. 圆弧上最近点（世界坐标）
-    ang = t
-    c_local, s_local = np.cos(ang), np.sin(ang)
-    if k > 0:
-        nearest_local = np.array([R_arc * np.sin(ang),
-                                  R_arc * (1 - np.cos(ang))])
-    else:
-        nearest_local = np.array([R_arc * np.sin(ang),
-                                  -R_arc * (1 - np.cos(ang))])
-    # 局部 → 世界
-    rot = np.array([[ chord[0], -chord[1]],
-                    [ chord[1],  chord[0]]]) / chord_len
-    nearest = p_start + rot @ nearest_local
+    # 6. 若有重合，计算弧上最近点：沿向量 alpha0（圆心指向障碍心方向）的投影并裁剪到弧区间
+    alpha_proj = alpha0
+    # 将投影相对于起点的相对角度
+    t = _wrap(alpha_proj - ang_start)
+    t_clamped = np.clip(t, min(0.0, total_ang), max(0.0, total_ang))
+    ang_nearest = ang_start + t_clamped
+    nearest = c_arc + np.array([np.cos(ang_nearest), np.sin(ang_nearest)]) * R
 
-    # 6. 穿透检测
+    # 7. 穿透检测与返回
     dist_vec = c - nearest
     dist = np.linalg.norm(dist_vec)
-    if dist >= r or dist < 1e-12:
+    if dist < 1e-12:
         return None
-    normal = dist_vec / dist
+    if dist >= r + eps:
+        return None
+    normal = dist_vec / (dist + 1e-12)
     depth = r - dist
     col_point = nearest - normal * depth
-    # ✅ 把角度 t 归一化为 0~1 的段内比例
-    frac = t / total_ang if abs(total_ang) > 1e-6 else 0.0
+    frac = (t_clamped / total_ang) if abs(total_ang) > 1e-12 else 0.0
     return nearest, normal, depth, col_point, frac
-
 
 def _line_circle_nearest(p1, p2, c, r):
     """旧线段逻辑，备用"""

@@ -4,15 +4,16 @@ from typing import List
 # ---------------- 2D ---------------- #
 class PCCSeg2D:
     __slots__ = ("L", "kappa", "p_start", "p_end", 
-                 "dir_start", "dir_end")
+                 "dir_start", "dir_end", "center")
 
     def __init__(self, L: float, kappa: float,
-                 p_start: np.ndarray = None):
+                 p_start: np.ndarray = None, dir_start: np.ndarray = None):
         self.L, self.kappa = L, kappa
         self.p_start = p_start if p_start is not None else np.zeros(2)
         self.p_end = None               # 将在 fk() 中自动计算
-        self.dir_start: np.ndarray = np.array([1.0, 0.0])   # 默认 x 轴
+        self.dir_start: np.ndarray = dir_start if dir_start is not None else np.array([1.0, 0.0])   # 默认 x 轴
         self.dir_end: np.ndarray = None
+        self.center: np.ndarray = None
         self.fk()
 
     # ---------- 工具：2D 旋转矩阵 ----------
@@ -33,7 +34,7 @@ class PCCSeg2D:
             T0[:2, 2] = self.p_start
 
         k = self.kappa
-        if abs(k) < 0.1:                           # 直线
+        if abs(k) < 0.01:                           # 直线
             T_local = np.array([[1, 0, self.L],
                                 [0, 1, 0],
                                 [0, 0, 1]])
@@ -48,6 +49,19 @@ class PCCSeg2D:
         # 自动填写终点
         self.p_end = T_world[:2, 2].copy()
         self.dir_end = T_world[:2, 0]          # ✅ 世界系切线
+        if abs(k) >= 0.01:
+            # 圆心坐标（2D 平面）
+            r = 1.0 / k
+            mid = (self.p_start + self.p_end) / 2.0
+            chord_vec = self.p_end - self.p_start
+            perp = np.array([-chord_vec[1], chord_vec[0]])  # 垂直向量
+            perp = perp / (np.linalg.norm(perp) + 1e-12)
+            # 圆心在垂直方向，距离 = r * cos(θ/2)
+            dist_center = r * np.cos(self.L * k / 2.0)
+            self.center = mid + perp * np.sign(k) * dist_center
+        else:
+            self.center = None
+
         return T_world
 
 
