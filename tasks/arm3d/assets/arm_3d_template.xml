@@ -1,0 +1,37 @@
+<mujoco model="arm3d">
+  <option timestep="0.002" gravity="0 0 -9.81">
+    <flag flex="enable"/>
+  </option>
+
+  <worldbody>
+    <!-- 4 个绳锚点 -->
+    <body name="base" pos="0 0 0">
+      <site name="sU" pos="0  0.03  0.03"/>
+      <site name="sD" pos="0 -0.03  0.03"/>
+      <site name="sL" pos="0  0.03 -0.03"/>
+      <site name="sR" pos="0 -0.03 -0.03"/>
+    </body>
+
+    <!-- 随机 3D 球障碍 -->
+    <body name="obs1" pos="0.4 0.1 0.1"><geom type="sphere" size="0.1" rgba="1 0 0 1" mass="0"/></body>
+    <body name="obs2" pos="0.7 -0.1 -0.1"><geom type="sphere" size="0.1" rgba="1 0 0 1" mass="0"/></body>
+    <body name="target" pos="1.0 0.2 0.2"><geom type="sphere" size="0.04" rgba="0 1 0 1" mass="0"/></body>
+
+    <!-- 3D 管状 flex -->
+    <flex name="arm" dim="2" radius="0.02" rgba="0 0 1 1">
+      <node pos="0 0 0"/>
+      <node pos="0.2 0 0"/>
+      <node pos="0.4 0 0"/>
+      <node pos="0.6 0 0"/>
+      <node pos="0.8 0 0"/>
+      <node pos="1.0 0 0"/>
+    </flex>
+  </worldbody>
+
+  <equality>
+    <distance name="up"    active="true" solref="0.02 1" margin="0"/>
+    <distance name="down"  active="true" solref="0.02 1" margin="0"/>
+    <distance name="left"  active="true" solref="0.02 1" margin="0"/>
+    <distance name="right" active="true" solref="0.02 1" margin="0"/>
+  </equality>
+</mujoco>
