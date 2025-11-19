@@ -15,7 +15,7 @@ obs, _ = env.reset()
 # ---------------- 滑块窗口 ---------------- #
 fig, ax = plt.subplots(figsize=(6, 3))
 plt.subplots_adjust(bottom=0.3)
-ax.set_title("SoftArm 2D 实时测试")
+ax.set_title("SoftArm 2D test with Slider Control", fontsize=14)
 ax.set_xticks([])
 ax.set_yticks([])
 

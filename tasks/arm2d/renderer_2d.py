@@ -57,9 +57,12 @@ class Renderer2D:
         p0 = seg.p_start
         p1 = seg.p_end
         k  = seg.kappa
-        L  = seg.L        
+        L  = seg.L     
 
-        if abs(k) < 0.01:          # 直线 → 用细线
+        if L < 1e-3:
+            return  # 太短不画   
+
+        if abs(k) < 0.001:          # 直线 → 用细线
             self.ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=1)
             print("Drawing line: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L)
             return
@@ -77,7 +80,7 @@ class Renderer2D:
         angle_sign = np.sign(k)
         sweep = angle_sign * theta
 
-        print("Drawing arc: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L, "r =", r, "theta =", theta / np.pi * 180.0)
+        
 
         # 圆心坐标（2D 平面）
         mid = (p0 + p1) / 2.0
@@ -98,11 +101,21 @@ class Renderer2D:
         # 5. 圆弧扫过角度
         sweep = angle_sign * theta
 
-        # Matplotlib Arc：椭圆 → 圆（width=height=2r）        
-        arc = Arc(center, 2 * r, 2 * r,
-                  theta1=np.degrees(start_angle),
-                  theta2=np.degrees(start_angle + sweep),
-                  color='steelblue', lw=1)
+        # Matplotlib Arc：椭圆 → 圆（width=height=2r）
+        if sweep >= 0:
+            arc = Arc(center, 2 * r, 2 * r,
+                      theta1=np.degrees(start_angle),
+                      theta2=np.degrees(start_angle + sweep),
+                      color='steelblue', lw=1)
+            print("Drawing arc: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L, "r =", r, "theta =", theta / np.pi * 180.0, "start_angle =", np.degrees(start_angle), "end_angle =", np.degrees(start_angle + sweep))
+        else:
+            arc = Arc(center, 2 * r, 2 * r,
+                        theta1=np.degrees(start_angle + sweep),
+                        theta2=np.degrees(start_angle),
+                        color='steelblue', lw=1)
+            print("Drawing arc: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L, "r =", r, "theta =", theta / np.pi * 180.0, "start_angle =", np.degrees(start_angle + sweep), "end_angle =", np.degrees(start_angle))
+        
+        
         
         self.arcs.append(self.ax.add_patch(arc))
 

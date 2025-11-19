@@ -55,9 +55,9 @@ class ArmModel2D(ContinuumArm2D):
         """
         for i, dk in enumerate(dkappa):
             if i < self.n_free:
-                print("Segment", i, "kappa before:", self.segs_free[i].kappa)
+                # print("Segment", i, "kappa before:", self.segs_free[i].kappa)
                 self.segs_free[i].kappa = np.clip(self.segs_free[i].kappa + dk, -1, 1)
-                print("Segment", i, "kappa after:", self.segs_free[i].kappa)
+                # print("Segment", i, "kappa after:", self.segs_free[i].kappa)
 
         self.T_free = self.fk_free()               # 重新 FK
 
@@ -65,9 +65,9 @@ class ArmModel2D(ContinuumArm2D):
 
     def _update_obs_from_free(self):
         """同步 obs 链到 free 链（起点、曲率）"""
-        for i in range(self.n_obs):
-            self.segs_obs[i].p_start = self.segs_free[i].p_start.copy()
-            self.segs_obs[i].kappa  = self.segs_free[i].kappa
+        self.segs_obs.clear()
+        for i in range(self.n_free):
+            self.segs_obs.append(_deep_copy_seg(self.segs_free[i]))
         self.fk_obs()
 
         # 更新 obs 链后，做碰撞检测 & 解析
@@ -83,6 +83,7 @@ class ArmModel2D(ContinuumArm2D):
                 info = seg_circle_nearest(seg, np.array([cx, cy]), r)
                 if info:
                     p, n, depth, col_point, frac = info   # 多收一个碰撞点
+                    print(f"Collision detected: seg {i}, circle center=({cx}, {cy}), r={r}, col_point={col_point}, frac={frac}, depth={depth}, normal={n}, p={p}")
                     # 把圆上碰撞点一并传给 arm
                     self.insert_segment_at(i, frac, n, col_point)
                     break        # 同一障碍只处理一次
@@ -114,7 +115,7 @@ class ArmModel2D(ContinuumArm2D):
         # ---- 3.2 前段：终点 = 碰撞点 ----
         p_start = seg.p_start
         p_col   = np.asarray(col_point, dtype=float)
-        k_new_front = fit_kappa(p_start, p_col, L1)
+        k_new_front = arc_curvature(p_start, p_col, L1)
         # 符号：保持与原来同向（可再细调）
         k_new_front = np.copysign(k_new_front, k_orig)
         seg_front = PCCSeg2D(L1, k_new_front, p_start, seg.dir_start)
@@ -161,23 +162,57 @@ class ArmModel2D(ContinuumArm2D):
             T = s.fk(T)       
         return T
 
-# 三点已知：起点、终点、弧长 → 求曲率 κ
-def fit_kappa(p0: np.ndarray, p1: np.ndarray, L: float) -> float:
+def arc_curvature(p0: np.ndarray, p1: np.ndarray, L: float) -> float:
     """
-    平面常曲率圆弧：已知弦长 d 和弧长 L，反求曲率 κ。
-    几何关系：d = 2 r sin(θ/2) ，L = r θ ，其中 r = 1/|κ|
-    → 解非线性方程 2 sin(δ κ)/κ = d ，δ = L/2
-    这里用一次 Newton 迭代即可收敛。
+    给定二维圆弧的起点 p0、终点 p1 和弧长 L，返回曲率 k。
+    
+    参数
+    ----
+    p0 : (2,) array_like
+        圆弧起点坐标 [x, y]
+    p1 : (2,) array_like
+        圆弧终点坐标 [x, y]
+    L  : float
+        圆弧的弧长（必须 > 0）
+    
+    返回
+    ----
+    k : float
+        曲率（k = 1 / r）
     """
-    d = np.linalg.norm(p1 - p0)
-    if d > L:                       # 不可能用圆弧连接
-        return 0.0                  # 退化为直线
-    delta = L * 0.5
-    k = 0.0                         # 初值
-    for _ in range(5):              # 5 次 Newton 足够
-        f  = 2.0 * np.sin(delta * k) / (k + 1e-12) - d
-        df = 2.0 * (delta * np.cos(delta * k) * k - np.sin(delta * k)) / (k * k + 1e-12)
-        k -= f / (df + 1e-12)
+    p0 = np.asarray(p0, float)
+    p1 = np.asarray(p1, float)
+    
+    # 弦长
+    c = np.linalg.norm(p1 - p0)
+    if c <= 0:
+        raise ValueError("p0 和 p1 不能重合")
+    if L <= c:
+        return 0.0
+    
+    # 牛顿迭代求解 θ
+    # 初值：用圆弧略大于弦长，θ 稍大于 0
+    theta = 2.0 * np.sqrt(6 * (L / c - 1))  # 近似初值，稳定收敛
+    
+    def f(t):
+        # 方程:  L * sin(t/2) = (c/2) * t
+        return L * np.sin(t * 0.5) - 0.5 * c * t
+    
+    def df(t):
+        # 导数
+        return 0.5 * L * np.cos(t * 0.5) - 0.5 * c
+    
+    for _ in range(100):          # 牛顿迭代
+        t_new = theta - f(theta) / df(theta)
+        if abs(t_new - theta) < 1e-12:
+            theta = t_new
+            break
+        theta = t_new
+    else:
+        raise RuntimeError("牛顿迭代未收敛")
+    
+    # 曲率
+    k = theta / L
     return k
 
 def _deep_copy_seg(seg: PCCSeg2D) -> PCCSeg2D:
@@ -208,7 +243,7 @@ def seg_circle_nearest(seg: 'PCCSeg2D',
 
     k = seg.kappa
     # 退化为直线段或未计算 center 的情况，回退到线段逻辑
-    if seg.center is None or abs(k) < 1e-6:
+    if seg.center is None or abs(k) < 1e-3:
         return _line_circle_nearest(p_start, p_end, c, r)
 
     c_arc = seg.center

@@ -34,7 +34,7 @@ class PCCSeg2D:
             T0[:2, 2] = self.p_start
 
         k = self.kappa
-        if abs(k) < 0.01:                           # 直线
+        if abs(k) < 0.001:                           # 直线
             T_local = np.array([[1, 0, self.L],
                                 [0, 1, 0],
                                 [0, 0, 1]])
@@ -49,7 +49,7 @@ class PCCSeg2D:
         # 自动填写终点
         self.p_end = T_world[:2, 2].copy()
         self.dir_end = T_world[:2, 0]          # ✅ 世界系切线
-        if abs(k) >= 0.01:
+        if abs(k) >= 0.001:
             # 圆心坐标（2D 平面）
             r = 1.0 / k
             mid = (self.p_start + self.p_end) / 2.0
