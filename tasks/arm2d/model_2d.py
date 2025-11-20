@@ -1,6 +1,22 @@
 from common.pcc import ContinuumArm2D, PCCSeg2D
 import numpy as np
 from typing import List, Optional, Tuple
+from dataclasses import dataclass
+
+
+@dataclass
+class CollisionPoint:
+    """记录一次碰撞的信息
+    """
+    pos: np.ndarray         # 碰撞发生的位置（通常为障碍圆上的碰撞点）
+    obstacle: Tuple[float, float, float]  # 障碍物 (cx, cy, r)
+    seg_id: int          # 发生碰撞的圆弧段的索引
+    nearest: np.ndarray    # 圆弧上最近点（世界坐标）
+    normal: np.ndarray     # 碰撞法向量（单位）
+    depth: float           # 穿透深度
+    col_point: np.ndarray  # 障碍圆上的真正碰撞点
+    frac: float            # 碰撞点在该段内的比例 0~1
+
 
 class ArmModel2D(ContinuumArm2D):
     """
@@ -26,14 +42,19 @@ class ArmModel2D(ContinuumArm2D):
         """
         self.obstacles = obstacles if obstacles is not None else []
 
+        # 碰撞点列表（每个元素为 CollisionPoint）
+        self.collision_points: List['CollisionPoint'] = []
+        # 碰撞点数量
+        self.n_collision_points: int = 0
+
         # 推进自由度（只改 free 和 obs 链起点 x）
         if base_x < 0.0 or base_x > 50.0:
             raise ValueError("base_x must be in [0.0, 50.0]")
         self.base_x = base_x
 
         # ① 自由链（初始状态）
-        self.segs_free = (segs or [PCCSeg2D(L=10.0, kappa=0.0, p_start=np.array([self.base_x, 0.0])),
-                                   PCCSeg2D(L=15.0, kappa=0.0)])
+        self.segs_free = (segs or [PCCSeg2D(seg_id = 0, L=10.0, kappa=0.0, p_start=np.array([self.base_x, 0.0])),
+                                   PCCSeg2D(seg_id = 1, L=15.0, kappa=0.0)])
         self.n_free = len(self.segs_free)
         self.T_free = self.fk_free()               # 自动计算起点/终点
 
@@ -42,6 +63,8 @@ class ArmModel2D(ContinuumArm2D):
         self.n_obs  = len(self.segs_obs)
         self._update_obs_from_free()  # 同步 obs 链
         self.T_obs = self.fk_obs()
+        
+
     
     # ========= 2. 动作：只驱动 free 链 ========= #
     def apply_action(self, dx: float, dkappa: np.ndarray):
@@ -49,6 +72,7 @@ class ArmModel2D(ContinuumArm2D):
         self.base_x = self.base_x + dx
         self.base_x = np.clip(self.base_x, 0.0, 50.0)
         self.segs_free[0].p_start[0] = self.base_x
+        self.segs_obs[0].p_start[0] = self.base_x
         """
         dkappa: [Δκ1, Δκ2, ...] 与 free 段数相同
         只改 free 链，再同步到 obs 链
@@ -57,6 +81,15 @@ class ArmModel2D(ContinuumArm2D):
             if i < self.n_free:
                 # print("Segment", i, "kappa before:", self.segs_free[i].kappa)
                 self.segs_free[i].kappa = np.clip(self.segs_free[i].kappa + dk, -1, 1)
+                self.segs_free[i].kappa_target = self.segs_free[i].kappa
+
+                for seg in self.segs_obs:
+                    if seg.seg_id == self.segs_free[i].seg_id:
+                        if seg.kappa_fixed:
+                            seg.kappa_target = self.segs_free[i].kappa
+                        else:
+                            seg.kappa = self.segs_free[i].kappa
+                            seg.kappa_target = self.segs_free[i].kappa
                 # print("Segment", i, "kappa after:", self.segs_free[i].kappa)
 
         self.T_free = self.fk_free()               # 重新 FK
@@ -64,10 +97,196 @@ class ArmModel2D(ContinuumArm2D):
         self._update_obs_from_free()
 
     def _update_obs_from_free(self):
-        """同步 obs 链到 free 链（起点、曲率）"""
-        self.segs_obs.clear()
-        for i in range(self.n_free):
-            self.segs_obs.append(_deep_copy_seg(self.segs_free[i]))
+        T0 = np.eye(3)
+        T0[:2, 2] = self.segs_obs[0].p_start
+        for i, seg in enumerate(self.segs_obs):
+            if not seg.kappa_fixed:
+                if i > 0:
+                    seg.p_start = self.segs_obs[i-1].p_end
+                    seg.dir_start = self.segs_obs[i-1].dir_end
+                T0 = seg.fk(T0)  # 先 FK 更新端点
+            else:
+                if seg.kappa_target != seg.kappa:
+                    for cp in self.collision_points:
+                        if cp.seg_id == seg.seg_id:
+                            cx, cy, cr = cp.obstacle
+                            if abs(seg.kappa) < 0.001:
+                                # 直线
+                                p_start, p_end = seg.p_start, seg.p_end
+                                d_vec  = p_end - p_start                    # 直线方向
+                                d_norm = d_vec / (np.hypot(*d_vec) + 1e-8)  # 单位方向
+                                normal = np.array([-d_norm[1], d_norm[0]])  # 左侧法向
+
+                                # 圆心在左侧还是右侧
+                                side = np.sign(np.dot(normal, (cx, cy) - p_start))   # +1 左  -1 右
+                                if side == 0: side = 1   # 恰好在直线上，默认当左侧处理
+                                # 交点类型
+                                col = cp.col_point
+                                t = np.dot(col - p_start, d_vec) / (np.dot(d_vec, d_vec) + 1e-8)
+                                if   t <= 0:      collision_type = 'start'
+                                elif t >= 1:      collision_type = 'end'
+                                else:             collision_type = 'mid'
+                                # 规则表：side * collision_type -> 允许方向 & 上下界
+                                rule = {
+                                    (+1,'start'): (+1, None,  1.0 / cr),   # 左侧起点：可任意+，最多到障碍圆曲率
+                                    (+1,'mid'):   (-1, None,  None),          # 左侧中间：只能往负
+                                    (+1,'end'):   (-1, None,  None),          # 左侧终点：只能往负
+
+                                    (-1,'start'): (-1, None,  1.0 / cr),  # 右侧起点：可任意-，最多到障碍圆曲率
+                                    (-1,'mid'):   (+1, None,  None),          # 右侧中间：只能往正
+                                    (-1,'end'):   (+1, None,  None),          # 右侧终点：只能往正
+                                }
+                                dir_sign, k_min, k_max = rule[(side, collision_type)]
+
+                                k_old = seg.kappa_target   # 当前目标曲率
+                                if dir_sign > 0:           # 只能增大
+                                    if seg.kappa_target > seg.kappa and (seg.kappa_target < k_max if k_max is not None else True):
+                                        seg.kappa = seg.kappa_target
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.kappa_fixed = False
+                                        self.collision_points.remove(cp)
+                                        T0 = seg.fk(T0)
+                                    else:
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.p_end = cp.col_point
+                                        seg.kappa = signed_curvature(seg.p_start, seg.dir_start, seg.p_end)
+                                        if abs(seg.kappa) >= abs(seg.kappa_target):
+                                            seg.kappa_fixed = False
+                                            self.collision_points.remove(cp)
+                                            seg.kappa_target = seg.kappa
+                                        else:
+                                            info = seg_circle_nearest(seg, (cx, cy), cr)
+                                            if not info:
+                                                seg.kappa_fixed = False
+                                                self.collision_points.remove(cp)
+                                                seg.kappa_target = seg.kappa
+                                        T0 = seg.fk(T0)                                        
+                                else:                      # 只能减小
+                                    if seg.kappa_target < seg.kappa and (seg.kappa_target > k_min if k_min is not None else True):
+                                        seg.kappa = seg.kappa_target
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.kappa_fixed = False
+                                        self.collision_points.remove(cp)
+                                        T0 = seg.fk(T0)
+                                    else:
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.p_end = cp.col_point
+                                        seg.kappa = signed_curvature(seg.p_start, seg.dir_start, seg.p_end)
+                                        if abs(seg.kappa) >= abs(seg.kappa_target):
+                                            seg.kappa_fixed = False
+                                            self.collision_points.remove(cp)
+                                            seg.kappa_target = seg.kappa
+                                        else:
+                                            info = seg_circle_nearest(seg, (cx, cy), cr)
+                                            if not info:
+                                                seg.kappa_fixed = False
+                                                self.collision_points.remove(cp)
+                                                seg.kappa_target = seg.kappa
+                                        T0 = seg.fk(T0)
+                            else:
+                                (sx, sy), sr = seg.center, 1.0 / seg.kappa
+                                if (cx - sx)**2 + (cy - sy)**2 > sr**2:
+                                    # 外切
+                                    if (seg.kappa > 0 and seg.kappa_target > seg.kappa) or (seg.kappa < 0 and seg.kappa_target < seg.kappa):
+                                        seg.kappa = seg.kappa_target
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.kappa_fixed = False
+                                        self.collision_points.remove(cp)
+                                        T0 = seg.fk(T0)
+                                    else:
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.p_end = cp.col_point
+                                        seg.kappa = signed_curvature(seg.p_start, seg.dir_start, seg.p_end)
+                                        if abs(seg.kappa) >= abs(seg.kappa_target):
+                                            seg.kappa_fixed = False
+                                            self.collision_points.remove(cp)
+                                            seg.kappa_target = seg.kappa
+                                        else:
+                                            info = seg_circle_nearest(seg, (cx, cy), cr)
+                                            if not info:
+                                                seg.kappa_fixed = False
+                                                self.collision_points.remove(cp)
+                                                seg.kappa_target = seg.kappa
+                                        T0 = seg.fk(T0)
+                                else:
+                                    # 内切
+                                    if (seg.kappa > 0 and seg.kappa_target < seg.kappa) or (seg.kappa < 0 and seg.kappa_target > seg.kappa):
+                                        seg.kappa = seg.kappa_target
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.kappa_fixed = False
+                                        self.collision_points.remove(cp)
+                                        T0 = seg.fk(T0)
+                                    else:
+                                        seg.p_start = T0[:2, 2]
+                                        if i > 0:
+                                            seg.dir_start = self.segs_obs[i-1].dir_end
+                                        else:
+                                            seg.dir_start = np.array([1.0, 0.0])
+                                        seg.p_end = cp.col_point
+                                        seg.kappa = signed_curvature(seg.p_start, seg.dir_start, seg.p_end)
+                                        if abs(seg.kappa) >= abs(seg.kappa_target):
+                                            seg.kappa_fixed = False
+                                            self.collision_points.remove(cp)
+                                            seg.kappa_target = seg.kappa
+                                        else:
+                                            info = seg_circle_nearest(seg, (cx, cy), cr)
+                                            if not info:
+                                                seg.kappa_fixed = False
+                                                self.collision_points.remove(cp)
+                                                seg.kappa_target = seg.kappa
+                                        T0 = seg.fk(T0)
+                                break
+                else:
+                    for cp in self.collision_points:
+                        if cp.seg_id == seg.seg_id:
+                            seg.p_start = T0[:2, 2]
+                            if i > 0:
+                                seg.dir_start = self.segs_obs[i-1].dir_end
+                            else:
+                                seg.dir_start = np.array([1.0, 0.0])
+                            seg.p_end = cp.col_point
+                            seg.kappa = signed_curvature(seg.p_start, seg.dir_start, seg.p_end)
+                            if abs(seg.kappa) >= abs(seg.kappa_target):
+                                seg.kappa_fixed = False
+                                self.collision_points.remove(cp)
+                                seg.kappa_target = seg.kappa
+                            else:
+                                info = seg_circle_nearest(seg, (cp.obstacle[0], cp.obstacle[1]), cp.obstacle[2])
+                                if not info:
+                                    seg.kappa_fixed = False
+                                    self.collision_points.remove(cp)
+                                    seg.kappa_target = seg.kappa
+                            T0 = seg.fk(T0)
+                        break
+
         self.fk_obs()
 
         # 更新 obs 链后，做碰撞检测 & 解析
@@ -78,16 +297,58 @@ class ArmModel2D(ContinuumArm2D):
     def resolve_impulse(self):
         """对每段圆弧做弹簧-阻尼冲量，并拆段"""
         segs = self.segs_obs  # 只检测 obs 链   
+        # # 清空上一次的碰撞记录
+        # self.collision_points.clear()
+        # self.n_collision_points = 0
+        is_collision = False
         for cx, cy, r in self.obstacles:
             for i, seg in enumerate(segs):
                 info = seg_circle_nearest(seg, np.array([cx, cy]), r)
                 if info:
+                    is_collision = True
                     p, n, depth, col_point, frac = info   # 多收一个碰撞点
-                    print(f"Collision detected: seg {i}, circle center=({cx}, {cy}), r={r}, col_point={col_point}, frac={frac}, depth={depth}, normal={n}, p={p}")
+                    is_new_collision = True
+                    for cp in self.collision_points:
+                        if cp.obstacle == (float(cx), float(cy), float(r)) and cp.seg_id == seg.seg_id:
+                            # 已处理过该障碍物与该段
+                            is_new_collision = False
+                            break
+                    if not is_new_collision:
+                        continue
+                    # 记录碰撞信息
+                    cp = CollisionPoint(
+                        pos=np.asarray(col_point, dtype=float),
+                        obstacle=(float(cx), float(cy), float(r)),
+                        seg_id=seg.seg_id,
+                        nearest=np.asarray(p, dtype=float),
+                        normal=np.asarray(n, dtype=float),
+                        depth=float(depth),
+                        col_point=np.asarray(col_point, dtype=float),
+                        frac=float(frac)
+                    )
+                    self.collision_points.append(cp)
+                    self.n_collision_points = len(self.collision_points)
+                    print(
+                        f"Collision detected: seg {int(seg.seg_id)}, "
+                        f"circle center=({float(cx):.2f}, {float(cy):.2f}, r={float(r):.2f}), "
+                        f"col_point=({float(col_point[0]):.2f}, {float(col_point[1]):.2f}), "
+                        f"frac={float(frac):.2f}, "
+                        f"depth={float(depth):.2f}, "
+                        f"normal=({float(n[0]):.2f}, {float(n[1]):.2f}), "
+                        f"p=({float(p[0]):.2f}, {float(p[1]):.2f})"
+                    )
                     # 把圆上碰撞点一并传给 arm
                     self.insert_segment_at(i, frac, n, col_point)
                     break        # 同一障碍只处理一次
-
+        
+        # if not is_collision:
+        #     # 无碰撞时，清空碰撞点列表
+        #     if self.collision_points:
+        #         self.collision_points.clear()
+        #         self.n_collision_points = 0
+        #     # 重置所有段的 kappa_fixed 状态
+        #     for seg in self.segs_obs:
+        #         seg.kappa_fixed = False
 
 
     # ========= 3. 碰撞拆段 ========= #
@@ -118,20 +379,65 @@ class ArmModel2D(ContinuumArm2D):
         k_new_front = arc_curvature(p_start, p_col, L1)
         # 符号：保持与原来同向（可再细调）
         k_new_front = np.copysign(k_new_front, k_orig)
-        seg_front = PCCSeg2D(L1, k_new_front, p_start, seg.dir_start)
-
-        print("seg_front: L =", L1, "kappa =", k_new_front, "p_start =", p_start, "dir_start =", seg.dir_start)
+        seg_front = PCCSeg2D(seg.seg_id, L1, k_new_front, p_start, seg.dir_start)
+        seg_front.kappa_fixed = True
 
         # ---- 3.3 后段：保持原 κ ----
-        seg_back = PCCSeg2D(L2, k_orig, p_col, seg_front.dir_end)
+        seg_back = PCCSeg2D(seg.seg_id, L2, k_orig, p_col, seg_front.dir_end)
+        seg_back.kappa_fixed = True
 
-        print("seg_back: L =", L2, "kappa =", k_orig, "p_start =", p_col, "dir_start =", seg_front.dir_end)
+
+        print(f"seg_front: L = {float(L1):.2f}, kappa = {float(k_new_front):.2f}, "
+            f"p_start = ({float(p_start[0]):.2f}, {float(p_start[1]):.2f}), "
+            f"dir_start = ({float(seg.dir_start[0]):.2f}, {float(seg.dir_start[1]):.2f})")
+
+        print(f"seg_back:  L = {float(L2):.2f}, kappa = {float(k_orig):.2f}, "
+            f"p_start = ({float(p_col[0]):.2f}, {float(p_col[1]):.2f}), "
+            f"dir_start = ({float(seg_front.dir_end[0]):.2f}, {float(seg_front.dir_end[1]):.2f})")
         
 
         # ---- 3.4 替换列表 ----
         self.segs_obs[i:i + 1] = [seg_front, seg_back]
         self.n_seg_obs = len(self.segs_obs)          # 更新段数
         self.fk_obs()                            # 重新 FK
+
+    def merge_segments_at(self, i: int) -> bool:
+        """
+        把 self.segs_obs[i] 与 self.segs_obs[i+1] 合并成一条。
+        成功返回 True，否则 False。
+        """
+        if i + 1 >= len(self.segs_obs):
+            return False
+
+        seg1 = self.segs_obs[i]
+        seg2 = self.segs_obs[i + 1]
+
+        # # 1. 合并条件：曲率同号且绝对值足够接近，方向连续
+        # if not (abs(seg1.kappa - seg2.kappa) < 1e-4 and
+        #         np.allclose(seg1.dir_end, seg2.dir_start, atol=1e-4)):
+        #     return False
+
+        # 2. 新长度
+        new_L = seg1.L + seg2.L
+
+        # 3. 新段：继承前段起点、后段终点，曲率不变
+        new_seg = PCCSeg2D(
+            seg_id=seg1.seg_id,      # 沿用原 ID
+            L=new_L,
+            kappa=seg1.kappa,
+            p_start=seg1.p_start,
+            dir_start=seg1.dir_start
+        )
+        new_seg.kappa_fixed = False
+
+        # 4. 列表替换
+        self.segs_obs[i:i + 2] = [new_seg]
+        self.n_seg_obs = len(self.segs_obs)
+
+        # # 5. 重新正运动学
+        # self.fk_obs()
+        return True
+
 
     # ========= 4. 辅助：整条臂 FK 并自动接力起点 ========= #
     def fk_free(self, T0: np.ndarray = None):
@@ -156,9 +462,16 @@ class ArmModel2D(ContinuumArm2D):
             T[:2, 2] = self.segs_obs[0].p_start
         else:
             T = T0
+        for i, s1 in enumerate(self.segs_obs):
+            if i < len(self.segs_obs) - 1:
+                s2 = self.segs_obs[i + 1]
+                if s1.seg_id == s2.seg_id and not s1.kappa_fixed and not s2.kappa_fixed:
+                    self.merge_segments_at(i)        
+
         for i, s in enumerate(self.segs_obs):            
             if i > 0:
-                s.p_start = self.segs_obs[i-1].p_end     
+                s.p_start = self.segs_obs[i-1].p_end  
+                s.dir_start = self.segs_obs[i-1].dir_end   
             T = s.fk(T)       
         return T
 
@@ -215,9 +528,38 @@ def arc_curvature(p0: np.ndarray, p1: np.ndarray, L: float) -> float:
     k = theta / L
     return k
 
+def signed_curvature(p0: np.ndarray,
+                     t0: np.ndarray,
+                     p1: np.ndarray) -> float:
+    """
+    已知圆弧起点 p0、起点单位切向 t0、终点 p1，
+    返回带符号曲率 k：逆时针为正，顺时针为负。
+    """
+    p0 = np.asarray(p0, float)
+    p1 = np.asarray(p1, float)
+    t0 = np.asarray(t0, float)
+    
+    v = p1 - p0
+    c = np.linalg.norm(v)
+    if c == 0:
+        return 0.0
+    
+    u = v / c
+    d = np.clip(np.dot(t0, u), -1.0, 1.0)
+    if d <= -1.0 + 1e-12:
+        raise ValueError("切线反向，无法构成有限圆弧")
+    
+    phi = np.arccos(d)          # 0 ≤ φ < π
+    cross = t0[0]*v[1] - t0[1]*v[0]
+    sign = 1.0 if cross >= 0 else -1.0
+    
+    k = sign * (2.0 * np.sin(phi) / c)
+    return k
+
+
 def _deep_copy_seg(seg: PCCSeg2D) -> PCCSeg2D:
     """深拷贝一段 PCC（含起点坐标）"""
-    new = PCCSeg2D(L=seg.L, kappa=seg.kappa, p_start=seg.p_start.copy())
+    new = PCCSeg2D(seg_id=seg.seg_id, L=seg.L, kappa=seg.kappa, p_start=seg.p_start.copy())
     return new
 
 

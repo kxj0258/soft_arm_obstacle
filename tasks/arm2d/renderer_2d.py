@@ -64,7 +64,7 @@ class Renderer2D:
 
         if abs(k) < 0.001:          # 直线 → 用细线
             self.ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=1)
-            print("Drawing line: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L)
+            print(f"Drawing line: p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), kappa = {float(k):.2f}, L = {float(L):.2f}")
             return
         
         # 1. 段间切线连续：本段起始角 = 前段末端方向（世界系）
@@ -107,15 +107,17 @@ class Renderer2D:
                       theta1=np.degrees(start_angle),
                       theta2=np.degrees(start_angle + sweep),
                       color='steelblue', lw=1)
-            print("Drawing arc: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L, "r =", r, "theta =", theta / np.pi * 180.0, "start_angle =", np.degrees(start_angle), "end_angle =", np.degrees(start_angle + sweep))
+            print(f"Drawing arc: p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
+                f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
+                f"start_angle = {np.degrees(float(start_angle)):.2f}, end_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}")
         else:
             arc = Arc(center, 2 * r, 2 * r,
                         theta1=np.degrees(start_angle + sweep),
                         theta2=np.degrees(start_angle),
                         color='steelblue', lw=1)
-            print("Drawing arc: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L, "r =", r, "theta =", theta / np.pi * 180.0, "start_angle =", np.degrees(start_angle + sweep), "end_angle =", np.degrees(start_angle))
-        
-        
+            print(f"Drawing arc: p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
+                f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
+                f"start_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}, end_angle = {np.degrees(float(start_angle)):.2f}")
         
         self.arcs.append(self.ax.add_patch(arc))
 

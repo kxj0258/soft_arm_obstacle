@@ -3,12 +3,15 @@ from typing import List
 
 # ---------------- 2D ---------------- #
 class PCCSeg2D:
-    __slots__ = ("L", "kappa", "p_start", "p_end", 
+    __slots__ = ("seg_id", "L", "kappa", "kappa_target", "kappa_fixed", "p_start", "p_end", 
                  "dir_start", "dir_end", "center")
 
-    def __init__(self, L: float, kappa: float,
+    def __init__(self, seg_id: int, L: float, kappa: float,
                  p_start: np.ndarray = None, dir_start: np.ndarray = None):
+        self.seg_id = seg_id
         self.L, self.kappa = L, kappa
+        self.kappa_target = kappa    # 目标曲率（用于平滑控制）
+        self.kappa_fixed = False           # 是否固定不动
         self.p_start = p_start if p_start is not None else np.zeros(2)
         self.p_end = None               # 将在 fk() 中自动计算
         self.dir_start: np.ndarray = dir_start if dir_start is not None else np.array([1.0, 0.0])   # 默认 x 轴
