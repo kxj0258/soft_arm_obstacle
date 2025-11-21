@@ -11,13 +11,24 @@ class Renderer2D:
         self.ax.set_aspect('equal')
         self.ax.set_xlim(-20.0, 220.0)
         self.ax.set_ylim(-60.0, 60.0)
+        self.ax.set_title("Obstacles-Space Arcs")
+
+        # ====== 新增：自由空间窗口 ======
+        self.fig_free, self.ax_free = plt.subplots(figsize=(7, 5))
+        self.ax_free.set_aspect('equal')
+        self.ax_free.set_xlim(-20.0, 220.0)
+        self.ax_free.set_ylim(-60.0, 60.0)
+        self.ax_free.set_title("Free-Space Arcs (No Obstacles)")
+
         self.fps = fps
 
         # —— 圆弧列表（动态增减）——
         self.arcs = []
         # —— 障碍 & 目标 ——
         self.circ_obs = []
+        self.arcs_free = []
         self.target_circle = None
+        self.target_circle_free = None
         self._is_open = True
         plt.show(block=False)
 
@@ -30,10 +41,11 @@ class Renderer2D:
         self.ax.set_aspect('equal')
         self.ax.set_xlim(-10.0, 80.0)
         self.ax.set_ylim(-30.0, 30.0)
+        self.ax.set_title("Obstacles-Space Arcs")
 
         # 2. 逐段画真实圆弧
         for seg in arm.segs_obs:
-            self._draw_one_arc(arm, seg)
+            self._draw_one_arc(self.ax, arm, seg)
 
         for x, y, r in obstacles:
             c = Circle((x, y), r, color='crimson', ec='k')
@@ -41,15 +53,33 @@ class Renderer2D:
             self.circ_obs.append(c)
 
         # 4. 目标
-        self.target_circle = Circle(target, 2.0, color='lime', ec='k')
+        self.target_circle = Circle(target, 1.0, color='lime', ec='k')
         self.ax.add_patch(self.target_circle)
     
         # 5. 立即刷新
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
 
+        # --- 新增：自由空间窗口绘制 ---
+        self.ax_free.clear()
+        self.ax_free.set_aspect('equal')
+        self.ax_free.set_xlim(-10.0, 80.0)
+        self.ax_free.set_ylim(-30.0, 30.0)
+        self.ax_free.set_title("Free-Space Arcs (No Obstacles)")
+
+        # 只画 segs_free，没有障碍物，也没有目标
+        for seg in arm.segs_free:
+            self._draw_one_arc(self.ax_free, arm, seg)
+
+        self.target_circle_free = Circle(target, 1.0, color='lime', ec='k')
+        self.ax_free.add_patch(self.target_circle_free)
+
+        # 刷新
+        self.fig_free.canvas.draw_idle()
+        self.fig_free.canvas.flush_events()
+
     # ---------- 画一段 PCC 圆弧（C¹ 连续）  ----------
-    def _draw_one_arc(self, arm, seg):
+    def _draw_one_arc(self, ax, arm, seg):
         """
         seg 必须有：p_start, p_end, L, kappa
         用 Matplotlib Arc 画真实圆弧（无近似）
@@ -60,15 +90,21 @@ class Renderer2D:
         L  = seg.L     
 
         if L < 1e-3:
-            return  # 太短不画   
+            return  # 太短不画
+
+        if ax == self.ax:
+            ax_name = "obstacle"
+            idx = arm.segs_obs.index(seg)
+        else:
+            ax_name = "free"
+            idx = arm.segs_free.index(seg)
 
         if abs(k) < 0.001:          # 直线 → 用细线
-            self.ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=1)
-            print(f"Drawing line: p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), kappa = {float(k):.2f}, L = {float(L):.2f}")
+            ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=1)
+            print(f"Drawing line in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), kappa = {float(k):.2f}, L = {float(L):.2f}")
             return
         
         # 1. 段间切线连续：本段起始角 = 前段末端方向（世界系）
-        idx = arm.segs_obs.index(seg)
         if idx > 0:                           # 非首段
             world_tangent = seg.dir_start
         else:                                 # 首段用默认 x 轴
@@ -107,7 +143,7 @@ class Renderer2D:
                       theta1=np.degrees(start_angle),
                       theta2=np.degrees(start_angle + sweep),
                       color='steelblue', lw=1)
-            print(f"Drawing arc: p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
+            print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
                 f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
                 f"start_angle = {np.degrees(float(start_angle)):.2f}, end_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}")
         else:
@@ -115,11 +151,11 @@ class Renderer2D:
                         theta1=np.degrees(start_angle + sweep),
                         theta2=np.degrees(start_angle),
                         color='steelblue', lw=1)
-            print(f"Drawing arc: p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
+            print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
                 f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
                 f"start_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}, end_angle = {np.degrees(float(start_angle)):.2f}")
         
-        self.arcs.append(self.ax.add_patch(arc))
+        self.arcs.append(ax.add_patch(arc))
 
     def close(self):
         self._is_open = False

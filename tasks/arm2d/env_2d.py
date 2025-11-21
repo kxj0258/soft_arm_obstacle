@@ -10,7 +10,7 @@ class SoftArmObstacle2DPyEnv(gym.Env):
 
     def __init__(self, render_mode="human"):
         super().__init__()
-        self.obstacles = [(25.0, -5.0, 3.0), (40.0, 10.0, 3.0)]
+        self.obstacles = [(25.0, -5.0, 2.0), (40.0, 10.0, 2.0)]
         self.arm = ArmModel2D(obstacles = self.obstacles)
         self.render_mode = render_mode
         self.renderer = Renderer2D(fps=self.metadata["render_fps"])
