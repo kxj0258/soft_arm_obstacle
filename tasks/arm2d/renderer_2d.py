@@ -27,6 +27,7 @@ class Renderer2D:
         # —— 障碍 & 目标 ——
         self.circ_obs = []
         self.arcs_free = []
+        self.circ_free = []
         self.target_circle = None
         self.target_circle_free = None
         self._is_open = True
@@ -37,7 +38,8 @@ class Renderer2D:
         if not self._is_open:
             return
         
-        self.ax.clear() 
+        self.ax.clear()
+        self.circ_obs.clear()
         self.ax.set_aspect('equal')
         self.ax.set_xlim(-10.0, 80.0)
         self.ax.set_ylim(-30.0, 30.0)
@@ -62,6 +64,7 @@ class Renderer2D:
 
         # --- 新增：自由空间窗口绘制 ---
         self.ax_free.clear()
+        self.circ_free.clear()
         self.ax_free.set_aspect('equal')
         self.ax_free.set_xlim(-10.0, 80.0)
         self.ax_free.set_ylim(-30.0, 30.0)
@@ -73,6 +76,13 @@ class Renderer2D:
 
         self.target_circle_free = Circle(target, 1.0, color='lime', ec='k')
         self.ax_free.add_patch(self.target_circle_free)
+
+        for x, y, r in obstacles:
+            c = Circle((x, y), r,
+                       facecolor=(0.9, 0.1, 0.2, 0.65),  # R,G,B,α  65 % 不透明
+                       edgecolor='k')
+            self.ax_free.add_patch(c)
+            self.circ_free.append(c)
 
         # 刷新
         self.fig_free.canvas.draw_idle()
@@ -100,7 +110,7 @@ class Renderer2D:
             idx = arm.segs_free.index(seg)
 
         if abs(k) < 0.001:          # 直线 → 用细线
-            ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=1)
+            ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=3)
             print(f"Drawing line in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), kappa = {float(k):.2f}, L = {float(L):.2f}")
             return
         
@@ -142,7 +152,7 @@ class Renderer2D:
             arc = Arc(center, 2 * r, 2 * r,
                       theta1=np.degrees(start_angle),
                       theta2=np.degrees(start_angle + sweep),
-                      color='steelblue', lw=1)
+                      color='steelblue', lw=3)
             print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
                 f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
                 f"start_angle = {np.degrees(float(start_angle)):.2f}, end_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}")
@@ -150,7 +160,7 @@ class Renderer2D:
             arc = Arc(center, 2 * r, 2 * r,
                         theta1=np.degrees(start_angle + sweep),
                         theta2=np.degrees(start_angle),
-                        color='steelblue', lw=1)
+                        color='steelblue', lw=3)
             print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
                 f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
                 f"start_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}, end_angle = {np.degrees(float(start_angle)):.2f}")
