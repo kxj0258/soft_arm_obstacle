@@ -10,14 +10,14 @@ class SoftArmObstacle2DPyEnv(gym.Env):
 
     def __init__(self, render_mode="human"):
         super().__init__()
-        self.obstacles = [(25.0, -5.0, 2.0), (40.0, 10.0, 2.0)]
+        self.obstacles = [(25.0, -5.0, 2.0), (30.0, 5.0, 2.0), (36.0, 2.0, 2.0), (35.0, -5.0, 2.0), (40.0, 10.0, 2.0)]
         self.arm = ArmModel2D(obstacles = self.obstacles)
         self.render_mode = render_mode
         self.renderer = Renderer2D(fps=self.metadata["render_fps"])
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(3,), dtype=np.float32)
         self.action_space = gym.spaces.Box(-1, 1, shape=(3,), dtype=np.float32)
         self.dt = 1/30
-        self.target = (50.0, 15.0)  # 目标位置
+        self.target = (44.0, 11.5)  # 目标位置
 
     def _get_obs(self):
         T = self.arm.T_obs

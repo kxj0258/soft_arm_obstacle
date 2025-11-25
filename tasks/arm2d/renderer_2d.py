@@ -9,15 +9,17 @@ class Renderer2D:
     def __init__(self, fps=30):
         self.fig, self.ax = plt.subplots(figsize=(7, 5))
         self.ax.set_aspect('equal')
-        self.ax.set_xlim(-20.0, 220.0)
-        self.ax.set_ylim(-60.0, 60.0)
+        self.ax_xlim = (-5.0, 55.0)
+        self.ax_ylim = (-15.0, 15.0)
+        self.ax.set_xlim(self.ax_xlim)
+        self.ax.set_ylim(self.ax_ylim)
         self.ax.set_title("Obstacles-Space Arcs")
 
         # ====== 新增：自由空间窗口 ======
         self.fig_free, self.ax_free = plt.subplots(figsize=(7, 5))
         self.ax_free.set_aspect('equal')
-        self.ax_free.set_xlim(-20.0, 220.0)
-        self.ax_free.set_ylim(-60.0, 60.0)
+        self.ax_free.set_xlim(self.ax_xlim)
+        self.ax_free.set_ylim(self.ax_ylim)
         self.ax_free.set_title("Free-Space Arcs (No Obstacles)")
 
         self.fps = fps
@@ -41,8 +43,8 @@ class Renderer2D:
         self.ax.clear()
         self.circ_obs.clear()
         self.ax.set_aspect('equal')
-        self.ax.set_xlim(-10.0, 80.0)
-        self.ax.set_ylim(-30.0, 30.0)
+        self.ax.set_xlim(self.ax_xlim)
+        self.ax.set_ylim(self.ax_ylim)
         self.ax.set_title("Obstacles-Space Arcs")
 
         # 2. 逐段画真实圆弧
@@ -66,8 +68,8 @@ class Renderer2D:
         self.ax_free.clear()
         self.circ_free.clear()
         self.ax_free.set_aspect('equal')
-        self.ax_free.set_xlim(-10.0, 80.0)
-        self.ax_free.set_ylim(-30.0, 30.0)
+        self.ax_free.set_xlim(self.ax_xlim)
+        self.ax_free.set_ylim(self.ax_ylim)
         self.ax_free.set_title("Free-Space Arcs (No Obstacles)")
 
         # 只画 segs_free，没有障碍物，也没有目标
@@ -111,7 +113,7 @@ class Renderer2D:
 
         if abs(k) < 0.001:          # 直线 → 用细线
             ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=3)
-            print(f"Drawing line in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), kappa = {float(k):.2f}, L = {float(L):.2f}")
+            # print(f"Drawing line in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), kappa = {float(k):.2f}, L = {float(L):.2f}")
             return
         
         # 1. 段间切线连续：本段起始角 = 前段末端方向（世界系）
@@ -153,17 +155,17 @@ class Renderer2D:
                       theta1=np.degrees(start_angle),
                       theta2=np.degrees(start_angle + sweep),
                       color='steelblue', lw=3)
-            print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
-                f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
-                f"start_angle = {np.degrees(float(start_angle)):.2f}, end_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}")
+            # print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
+            #     f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
+            #     f"start_angle = {np.degrees(float(start_angle)):.2f}, end_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}")
         else:
             arc = Arc(center, 2 * r, 2 * r,
                         theta1=np.degrees(start_angle + sweep),
                         theta2=np.degrees(start_angle),
                         color='steelblue', lw=3)
-            print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
-                f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
-                f"start_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}, end_angle = {np.degrees(float(start_angle)):.2f}")
+            # print(f"Drawing arc in ", ax_name, ": p0 = ({float(p0[0]):.2f}, {float(p0[1]):.2f}), p1 = ({float(p1[0]):.2f}, {float(p1[1]):.2f}), "
+            #     f"kappa = {float(k):.2f}, kappa_target = {float(seg.kappa_target):.2f}, L = {float(L):.2f}, r = {float(r):.2f}, theta = {float(theta) / np.pi * 180.0:.2f}, "
+            #     f"start_angle = {np.degrees(float(start_angle) + float(sweep)):.2f}, end_angle = {np.degrees(float(start_angle)):.2f}")
         
         self.arcs.append(ax.add_patch(arc))
 
