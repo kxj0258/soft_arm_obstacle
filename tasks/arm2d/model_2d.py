@@ -61,50 +61,45 @@ class ArmModel2D(ContinuumArm2D):
         # ② 观测链 = 自由链深拷贝（第一次无碰撞）
         self.segs_obs = [_deep_copy_seg(s) for s in self.segs_free]
         self.n_obs  = len(self.segs_obs)
+        self.resolve_impulse("free") 
         self._update_obs_from_free()  # 同步 obs 链
         self.T_obs = self.fk_obs()
         
 
     
     # ========= 2. 动作：只驱动 free 链 ========= #
-    def apply_action(self, dx: float, dkappa: np.ndarray):
-        """基座 x∈[0, 50.0] cm，只改 free 链起点"""
-        self.base_x = self.base_x + dx
-        self.base_x = np.clip(self.base_x, 0.0, 50.0)
+    def apply_action(self, dx: float, dl_vec: List[Tuple[float, float]]):
+        """
+        dx: 基座推进量（cm → 内部转 m 需注意单位）
+        dl_vec: 每段 (dl_left, dl_right)，长度必须 == n_free
+        """
+        # 1. 基座 x 推进
+        self.base_x = np.clip(self.base_x + dx, 0.0, 50.0)
         self.segs_free[0].p_start[0] = self.base_x
         self.segs_obs[0].p_start[0] = self.base_x
-        """
-        dkappa: [Δκ1, Δκ2, ...] 与 free 段数相同
-        只改 free 链，再同步到 obs 链
-        """
-        for i, dk in enumerate(dkappa):
-            if i < self.n_free:
-                # print("Segment", i, "kappa before:", self.segs_free[i].kappa)
-                self.segs_free[i].kappa = np.clip(self.segs_free[i].kappa + dk, -1, 1)
-                self.segs_free[i].kappa_target = self.segs_free[i].kappa
 
-                # for seg in self.segs_obs:
-                #     if seg.seg_id == self.segs_free[i].seg_id:
-                #         if seg.kappa_fixed:
-                #             seg.kappa_target = self.segs_free[i].kappa
-                #         else:
-                #             seg.kappa = self.segs_free[i].kappa
-                #             seg.kappa_target = self.segs_free[i].kappa
-                # print("Segment", i, "kappa after:", self.segs_free[i].kappa)
-
+        # 2. 驱动 free 链 → 只发肌腱长度变化
+        if len(dl_vec) != self.n_free:
+            raise ValueError("dl_vec 长度与自由段数不符")
+        for seg, (dll, dlr) in zip(self.segs_free, dl_vec):
+            seg.drive(dll, dlr)          # 内部更新 l_left/l_right 并算 κ_target
+            seg.kappa = seg.kappa_target
+                
         self.T_free = self.fk_free()
 
         self.resolve_impulse("free") 
 
         self._update_obs_from_free()
+        self.T_obs = self.fk_obs()
 
     def _update_obs_from_free(self):
         # 同步 free 到 obs 链
-        for seg_free in self.segs_free:
-            for seg_obs in self.segs_obs:
-                if seg_obs.seg_id == seg_free.seg_id:
-                    seg_obs.kappa = seg_free.kappa
-                    seg_obs.kappa_target = seg_free.kappa
+        self.segs_obs = [_deep_copy_seg(s) for s in self.segs_free]
+        # for seg_free in self.segs_free:
+        #     for seg_obs in self.segs_obs:
+        #         if seg_obs.seg_id == seg_free.seg_id:
+        #             seg_obs.kappa = seg_free.kappa
+        #             seg_obs.kappa_target = seg_free.kappa
         # 检查碰撞点列表
         free_collision_ids = []
         for i, collision_point in enumerate(self.collision_points):
@@ -113,14 +108,37 @@ class ArmModel2D(ContinuumArm2D):
                 free_collision_ids.append(i)
         
         for idx in free_collision_ids:
+            # collision_point = self.collision_points[idx]
+            # ids_obs_collision = []
+            # for i, seg_obs in enumerate(self.segs_obs):
+            #     if seg_obs.seg_id == collision_point.seg_id:
+            #         ids_obs_collision.append(i)
+            # if len(ids_obs_collision) >= 2:
+            #     start_id = ids_obs_collision[0]
+            #     end_id = ids_obs_collision[-1]
+            #     seg_l = 0
+            #     for i in range(start_id, end_id):
+            #         seg_l += self.segs_obs[i].L
             self.collision_points.pop(idx)
+
         self.n_collision_points = len(self.collision_points)
-        self.fk_obs()
 
         # 更新 obs 链后，做碰撞检测 & 解析
         # self.resolve_impulse("obs")
 
-        self.T_obs = self.fk_obs()
+    def _update_free_from_obs(self):
+        # 同步 obs 到 free 链
+        for seg_free in self.segs_free:
+            l_left = 0.0
+            l_right = 0.0
+            for seg_obs in self.segs_obs:
+                if seg_obs.seg_id == seg_free.seg_id:
+                    l_left += seg_obs.l_left
+                    l_right += seg_obs.l_right
+            seg_free.l_left = l_left
+            seg_free.l_right = l_right
+            seg_free.drive(0.0, 0.0)      # 更新 κ_target
+            seg_free.kappa = seg_free.kappa_target
 
     def resolve_impulse(self, mode: str = "free"):
         if mode == "free":
@@ -304,11 +322,11 @@ class ArmModel2D(ContinuumArm2D):
             T[:2, 2] = self.segs_obs[0].p_start
         else:
             T = T0
-        for i, s1 in enumerate(self.segs_obs):
-            if i < len(self.segs_obs) - 1:
-                s2 = self.segs_obs[i + 1]
-                if s1.seg_id == s2.seg_id and not s1.kappa_fixed and not s2.kappa_fixed:
-                    self.merge_segments_at(i)        
+        # for i, s1 in enumerate(self.segs_obs):
+        #     if i < len(self.segs_obs) - 1:
+        #         s2 = self.segs_obs[i + 1]
+        #         if s1.seg_id == s2.seg_id and not s1.kappa_fixed and not s2.kappa_fixed:
+        #             self.merge_segments_at(i)        
 
         for i, s in enumerate(self.segs_obs):            
             if i > 0:
