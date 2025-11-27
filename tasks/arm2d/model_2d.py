@@ -235,8 +235,8 @@ class ArmModel2D(ContinuumArm2D):
         print(f"col2free = ({float(col2free[0]):.2f}, {float(col2free[1]):.2f}), "
               f"col2obs = ({float(col2obs[0]):.2f}, {float(col2obs[1]):.2f})")
         print(f"Dot product = {float(np.dot(col2free, col2obs)):.2f}")
-        if np.dot(col2free, col2obs) < 0:
-            return True
+        # if np.dot(col2free, col2obs) > 0:
+        #     return True
         
         # ---- 3.3 新建两段 ----
         # k_front = np.copysign(k_front, k_orig)

@@ -28,9 +28,9 @@ class SoftArmObstacle2DPyEnv(gym.Env):
         a0, a1, a2 = act // 9 - 1, (act % 9) // 3 - 1, act % 3 - 1   # 三档各 -1/0/1
         # print("Decoded discrete action:", a0, a1, a2)
         dx = a0 * 0.1                               # 1 mm
-        dl_map = {-1: (-0.002,  0.002),   # -1：左收 0.02 mm，右放 0.02 mm
+        dl_map = {-1: (-0.001,  0.001),   # -1：左收 0.02 mm，右放 0.02 mm
                    0: ( 0.0,     0.0),      # 0：不变
-                   1: ( 0.002, -0.002)}   # 1：左放 0.02 mm，右收 0.02 mm
+                   1: ( 0.001, -0.001)}   # 1：左放 0.02 mm，右收 0.02 mm
         dl_vec = [dl_map[a1], dl_map[a2]]    # 两段肌腱驱动
         return dx, dl_vec
 
