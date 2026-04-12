@@ -1,23 +1,8 @@
-# environment.yml
-# conda env create -f environment.yml
-# conda activate soft_arm
 name: soft_arm
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - python=3.10
-  - pip
-  # MuJoCo 官方库（含 GL 渲染）
-  - mujoco>=3.1.0
-  # 科学计算
   - numpy
-  - scipy
-  # 强化学习 & 日志
   - gymnasium>=0.29
-  - pip:
-      # 可选：RL 训练框架
-      - stable-baselines3[extra]
-      - tensorboard
-      # 如需 Jupyter 调试
-      - ipykernel
+  - matplotlib

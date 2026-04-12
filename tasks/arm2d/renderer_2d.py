@@ -1,110 +1,118 @@
-import matplotlib
-matplotlib.use('TkAgg')
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Arc, Circle
+from matplotlib.patches import Circle
 
 
 class Renderer2D:
-    def __init__(self, fps=30):
-        self.fig, self.ax = plt.subplots(figsize=(7, 5))
-        self.ax.set_aspect('equal')
-        self.ax.set_xlim(-20.0, 220.0)
-        self.ax.set_ylim(-60.0, 60.0)
-        self.fps = fps
+    def __init__(
+        self,
+        *,
+        xlim: tuple[float, float] = (-2.0, 42.0),
+        ylim: tuple[float, float] = (-20.0, 20.0),
+        figsize: tuple[float, float] = (8.0, 5.0),
+    ):
+        self.xlim = xlim
+        self.ylim = ylim
+        self.figsize = figsize
+        self.figure = None
+        self.axis = None
 
-        # —— 圆弧列表（动态增减）——
-        self.arcs = []
-        # —— 障碍 & 目标 ——
-        self.circ_obs = []
-        self.target_circle = None
-        self._is_open = True
-        plt.show(block=False)
-
-    # ---------- 每帧调用 ----------
-    def update(self, arm, obstacles, target):
-        if not self._is_open:
+    def _ensure_canvas(self, human: bool) -> None:
+        if self.figure is not None and self.axis is not None:
             return
-        
-        self.ax.clear() 
-        self.ax.set_aspect('equal')
-        self.ax.set_xlim(-10.0, 80.0)
-        self.ax.set_ylim(-30.0, 30.0)
+        self.figure, self.axis = plt.subplots(figsize=self.figsize)
+        if human:
+            plt.ion()
+            plt.show(block=False)
 
-        # 2. 逐段画真实圆弧
-        for seg in arm.segs_obs:
-            self._draw_one_arc(arm, seg)
+    def _draw(self, scene: dict) -> None:
+        assert self.axis is not None
+        axis = self.axis
+        axis.clear()
+        axis.set_aspect("equal")
+        axis.set_xlim(*self.xlim)
+        axis.set_ylim(*self.ylim)
+        axis.set_xlabel("x")
+        axis.set_ylabel("y")
+        axis.set_title("Soft Arm Obstacle 2D")
+        axis.grid(alpha=0.2, linestyle="--")
 
-        for x, y, r in obstacles:
-            c = Circle((x, y), r, color='crimson', ec='k')
-            self.ax.add_patch(c)
-            self.circ_obs.append(c)
+        free_points = scene["free_points"]
+        observed_points = scene["observed_points"]
+        if len(free_points):
+            axis.plot(
+                free_points[:, 0],
+                free_points[:, 1],
+                linestyle="--",
+                linewidth=2.0,
+                color="#94a3b8",
+                label="free shape",
+            )
+        if len(observed_points):
+            axis.plot(
+                observed_points[:, 0],
+                observed_points[:, 1],
+                linewidth=3.0,
+                color="#2563eb",
+                label="contact-aware shape",
+            )
 
-        # 4. 目标
-        self.target_circle = Circle(target, 2.0, color='lime', ec='k')
-        self.ax.add_patch(self.target_circle)
-    
-        # 5. 立即刷新
-        self.fig.canvas.draw_idle()
-        self.fig.canvas.flush_events()
+        for obstacle in scene["obstacles"]:
+            axis.add_patch(
+                Circle(
+                    obstacle.center,
+                    obstacle.radius,
+                    facecolor="#f87171",
+                    edgecolor="#7f1d1d",
+                    alpha=0.7,
+                )
+            )
 
-    # ---------- 画一段 PCC 圆弧（C¹ 连续）  ----------
-    def _draw_one_arc(self, arm, seg):
-        """
-        seg 必须有：p_start, p_end, L, kappa
-        用 Matplotlib Arc 画真实圆弧（无近似）
-        """
-        p0 = seg.p_start
-        p1 = seg.p_end
-        k  = seg.kappa
-        L  = seg.L        
+        axis.add_patch(
+            Circle(
+                scene["target"],
+                scene["target_radius"],
+                facecolor="#4ade80",
+                edgecolor="#166534",
+                alpha=0.8,
+            )
+        )
 
-        if abs(k) < 0.1:          # 直线 → 用细线
-            self.ax.plot([p0[0], p1[0]], [p0[1], p1[1]], 'b-', lw=3)
-            return
-        
-        # 1. 段间切线连续：本段起始角 = 前段末端方向（世界系）
-        idx = arm.segs_obs.index(seg)
-        if idx > 0:                           # 非首段
-            world_tangent = seg.dir_start
-        else:                                 # 首段用默认 x 轴
-            world_tangent = np.array([1.0, 0.0])
+        if scene["collision_points"]:
+            collision_points = np.asarray(scene["collision_points"], dtype=float)
+            axis.scatter(
+                collision_points[:, 0],
+                collision_points[:, 1],
+                s=40,
+                c="#f59e0b",
+                edgecolors="black",
+                linewidths=0.5,
+                label="contact",
+                zorder=5,
+            )
 
-        # 圆心、半径、角度
-        r = 1.0 / abs(k)
-        theta = L / r                        # 总圆心角
-        angle_sign = np.sign(k)
-        sweep = angle_sign * theta
+        base_position = scene["base_position"]
+        tip_position = scene["tip_position"]
+        axis.scatter(base_position[0], base_position[1], c="black", s=50, marker="s", label="base", zorder=6)
+        axis.scatter(tip_position[0], tip_position[1], c="#1d4ed8", s=70, marker="o", label="tip", zorder=6)
+        axis.legend(loc="upper left")
 
-        print("Drawing arc: p0 =", p0, "p1 =", p1, "kappa =", k, "L =", L, "r =", r, "theta =", theta / np.pi * 180.0)
+    def render(self, scene: dict, mode: str = "human") -> np.ndarray | None:
+        human = mode == "human"
+        self._ensure_canvas(human=human)
+        self._draw(scene)
+        assert self.figure is not None
+        self.figure.canvas.draw()
+        if human:
+            self.figure.canvas.flush_events()
+            return None
+        image = np.asarray(self.figure.canvas.buffer_rgba())[..., :3].copy()
+        return image
 
-        # 圆心坐标（2D 平面）
-        mid = (p0 + p1) / 2.0
-        chord_vec = p1 - p0
-        perp = np.array([-chord_vec[1], chord_vec[0]])  # 垂直向量
-        perp = perp / (np.linalg.norm(perp) + 1e-12)
-        # 圆心在垂直方向，距离 = r * cos(θ/2)
-        dist_center = r * np.cos(theta / 2.0)
-        center = mid + perp * angle_sign * dist_center
-
-        # 4. 局部角度：世界切线 → 圆心局部系
-        center_to_p0 = p0 - center                       # 局部 x 轴方向
-        local_x = center_to_p0 / (np.linalg.norm(center_to_p0) + 1e-12)
-        if local_x[1] == 0:
-            start_angle = 0.0 if local_x[0] > 0 else np.pi
-        else:
-            start_angle = np.arctan2(local_x[1], local_x[0])
-        # 5. 圆弧扫过角度
-        sweep = angle_sign * theta
-
-        # Matplotlib Arc：椭圆 → 圆（width=height=2r）        
-        arc = Arc(center, 2 * r, 2 * r,
-                  theta1=np.degrees(start_angle),
-                  theta2=np.degrees(start_angle + sweep),
-                  color='steelblue', lw=3)
-        
-        self.arcs.append(self.ax.add_patch(arc))
-
-    def close(self):
-        self._is_open = False
-        plt.close(self.fig)
+    def close(self) -> None:
+        if self.figure is not None:
+            plt.close(self.figure)
+            self.figure = None
+            self.axis = None

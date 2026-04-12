@@ -1,158 +1,95 @@
-# 🌈 Soft-Arm-Obstacle  
-**连续体软体机械臂在复杂障碍环境中「主动利用碰撞」到达目标位姿的 MuJoCo 仿真框架**  
-支持 **2D/3D** 一键切换，碰撞即插入新段，开箱即用。
+# Soft Arm Obstacle
 
----
+一个聚焦于**纯 Python 2D 原型**的连续体软臂障碍环境。当前版本不再把 MuJoCo/3D 作为主流程，而是先把 2D PCC 建模、碰撞重构、Gym 环境、渲染和测试打磨成一条稳定可运行的路线。
 
-## 📦 功能一览
-| 模块 | 描述 |
-|------|------|
-| ✅ **分段常曲率（PCC）** | 2D 单曲率 / 3D 双曲率（俯仰+偏航） |
-| ✅ **绳驱建模** | 2D 左右绳 ∆L→κ；3D 四绳（上下左右）∆L→κ₁,κ₂ |
-| ✅ **碰撞-插入** | 与球障碍接触 → 在接触点自动插入新节点（MuJoCo flex） |
-| ✅ **标准 gym.Env** | 直接 `sb3.PPO` 训练 |
-| ✅ **随机障碍&目标** | 每次 reset 自动生成 |
-| ✅ **2D/3D 一键切** | `python main.py --task 2d/3d` |
+## 当前能力
 
----
+- 2D 分段常曲率软臂建模
+- 基座平移 + 多段曲率控制
+- 圆障碍采样与目标采样
+- 基于碰撞检测的“接触重构”响应
+- `gymnasium.Env` 接口
+- `human` / `rgb_array` 渲染
+- 自动化测试和 CLI 演示入口
 
-## 🚀 30 秒快速启动
+## 快速开始
 
 ```bash
-# 1. 克隆
-git clone https://github.com/your_name/soft_arm_obstacle.git
-cd soft_arm_obstacle
-
-# 2. 创建 conda 环境（Python 3.10）
 conda env create -f environment.yml
 conda activate soft_arm
 
-# 3. 运行 2D 演示
-python main.py --task 2d
-# 或 3D
-python main.py --task 3d
+python main.py --render-mode human
 ```
 
----
-
-## 🧱 手动安装（无 environment.yml）
+无界面 smoke test:
 
 ```bash
-# 创建环境
-conda create -n soft_arm python=3.10 -y
-conda activate soft_arm
-
-# MuJoCo 官方库 + 渲染依赖
-conda install -c conda-forge mujoco>=3.1.0
-pip install scipy gymnasium numpy
-
-# （可选）RL 训练
-pip install stable-baselines3[extra] tensorboard
+python main.py --render-mode none --episodes 1 --steps 20 --seed 0
 ```
 
-> 若需 **GPU 渲染**（headless 服务器）再装：
-> ```bash
-> conda install -c conda-forge mesa-libgl-devel egl
-> export MUJOCO_GL=egl
-> ```
+## 目录结构
 
----
-
-## 📁 工程结构
-
-```
+```text
 soft_arm_obstacle/
 ├── common/
-│   ├── pcc.py            # PCC 正逆运动学（2D/3D）
-│   └── utils.py
+│   ├── geometry.py        # 2D 向量与姿态工具
+│   ├── pcc.py             # 2D PCC 段与连续体链
+│   └── utils.py           # 观测拼接等小工具
+├── examples/
+│   └── manual_control_2d.py
 ├── tasks/
-│   ├── base_env.py       # 公共 gym.Env 基类
+│   ├── base_env.py
 │   ├── arm2d/
-│   │   ├── assets/arm_2d_template.xml
-│   │   ├── model_2d.py
-│   │   ├── sim_2d.py
-│   │   └── env_2d.py
-│   └── arm3d/
-│       ├── assets/arm_3d_template.xml
-│       ├── model_3d.py
-│       ├── sim_3d.py
-│       └── env_3d.py
-├── main.py               # 统一入口
-├── environment.yml       # conda 一键环境
-└── README.md             # 本文件
+│   │   ├── env_2d.py      # Gym 环境
+│   │   ├── model_2d.py    # 软臂几何模型
+│   │   ├── physics_2d.py  # 碰撞检测与接触响应
+│   │   ├── renderer_2d.py # Matplotlib 渲染
+│   │   └── sim_2d.py      # 场景采样与仿真封装
+│   └── arm3d/             # 暂缓实现的占位模块
+├── tests/
+│   ├── test_arm2d_env.py
+│   └── test_arm2d_model.py
+├── environment.yml
+└── main.py
 ```
 
----
+## 环境设计
 
-## 🔧 核心 API
+- 动作：`[delta_base_x, delta_kappa_0, delta_kappa_1, ...]`
+- 观测：
+  `tip(x, y, theta) + target(x, y) + base_x + controllable_kappas + flattened_obstacles + collision_count`
+- 奖励：
+  由目标距离、距离改善量、动作惩罚和轻微接触奖励组成
+- 终止：
+  末端进入目标圆
+- 截断：
+  达到 `max_steps`
 
-| 用法 | 代码 |
-|------|------|
-| 创建环境 | `env = gym.make("module:SoftArmObstacle2DEnv")` |
-| 随机障碍 | 继承 `BaseSoftArmEnv` 自动完成 |
-| 自定义目标 | 重写 `_regenerate_obstacles_target()` |
-| 插入节点 | 环境已内置，无需手动调用 |
-
----
-
-## 🎮 运行示例
-
-| 场景 | 命令 |
-|------|------|
-| 2D 随机测试 | `python main.py --task 2d` |
-| 3D 随机测试 | `python main.py --task 3d` |
-| RL 训练 2D | `python train.py --task 2d --algo PPO --timesteps 2e6` |
-| Headless 渲染 | `export MUJOCO_GL=egl && python main.py --task 3d` |
-
----
-
-## 📊 训练曲线（示例）
+## 运行手动控制示例
 
 ```bash
-tensorboard --logdir runs/
-# 打开 http://localhost:6006
+python examples/manual_control_2d.py
 ```
 
----
+这个脚本会打开环境窗口和一个滑块面板，方便手动调 `base_x` 和各段曲率动作。
 
-## 🛠️ 常见 issue
+## 运行测试
 
-1. **ImportError: mujoco**  
-   → 确保 `conda install -c conda-forge mujoco` 且版本 ≥3.1
-
-2. **GUI 黑屏**  
-   → 服务器请 `export MUJOCO_GL=egl` 或 `osmesa`
-
-3. **flex 插入失败**  
-   → MuJoCo ≥3.1 才支持 `mj_flexInsert`，升级即可
-
----
-
-## 🤝 贡献指南
-
-欢迎提 PR / Issue：  
-- 添加圆柱、盒子障碍  
-- 真实肌腱力-曲率非线性标定  
-- 用 Brax/MJX 做可微仿真  
-
----
-
-## 📜 License
-
-MIT © 2025 Your Name
-
----
-
-## 📌 Citation
-
-如果本项目对你的研究有帮助，请引用：
-
-```bibtex
-@misc{soft_arm_obstacle,
-  title={Soft-Arm-Obstacle: A MuJoCo-based Framework for Obstacle-aided Continuum Manipulation},
-  author={Your Name},
-  year={2025},
-  publisher={GitHub},
-  howpublished={\url{https://github.com/your_name/soft_arm_obstacle}}
-}
+```bash
+python -m unittest discover -s tests -v
 ```
+
+测试覆盖了这些关键点：
+
+- 2D 正向运动学基础正确
+- 碰撞响应不会产生 `NaN`
+- `reset(seed=...)` 可复现
+- `step()` 接口符合 Gym 约定
+- `rgb_array` 渲染返回图像
+- `main.py` CLI 可以无界面正常运行
+
+## 说明
+
+- `tasks/arm3d/` 目前是明确的暂缓占位实现，避免继续暴露半完成的坏路径。
+- 当前碰撞响应是面向原型验证的几何启发式方法，不是完整接触力学求解器。
+- 如果后续继续扩展，我们建议下一阶段再把 3D 或 MuJoCo 路线单独拉出做第二条主线，而不是再次混入当前 2D 原型。
