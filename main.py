@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse
 import time
 
-from tasks.arm2d import SoftArmObstacle2DEnv
+from tasks.arm2d import (
+    ArmModel2DConfig,
+    ContactResponse2DConfig,
+    SoftArmObstacle2DEnv,
+    list_preset_scenarios,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -13,17 +18,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--sleep", type=float, default=0.03)
+    parser.add_argument("--scenario-name", choices=list_preset_scenarios(), default=None)
+    parser.add_argument("--contact-backend", choices=["heuristic", "optimization"], default="heuristic")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     render_mode = None if args.render_mode == "none" else args.render_mode
-    env = SoftArmObstacle2DEnv(render_mode=render_mode, max_steps=args.steps)
+    env = SoftArmObstacle2DEnv(
+        render_mode=render_mode,
+        max_steps=args.steps,
+        model_config=ArmModel2DConfig(
+            contact_response=ContactResponse2DConfig(backend=args.contact_backend),
+        ),
+    )
 
     try:
         for episode in range(args.episodes):
-            observation, info = env.reset(seed=args.seed + episode)
+            reset_options = None if args.scenario_name is None else {"scenario_name": args.scenario_name}
+            observation, info = env.reset(seed=args.seed + episode, options=reset_options)
             episode_return = 0.0
 
             for step in range(args.steps):
@@ -42,7 +56,12 @@ def main() -> int:
             print(
                 f"episode={episode + 1} steps={step + 1} "
                 f"return={episode_return:.3f} distance={info['distance_to_target']:.3f} "
-                f"collisions={info['collision_count']} success={info['success']}"
+                f"collisions={info['collision_count']} "
+                f"backend={info['contact_backend']} "
+                f"state={info['contact_summary']['contact_state']} "
+                f"clearance={info['contact_summary']['min_clearance']:.3f} "
+                f"path={info['evaluation_metrics']['path_length']:.3f} "
+                f"success={info['success']}"
             )
     finally:
         env.close()

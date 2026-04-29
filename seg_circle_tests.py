@@ -1,62 +1,42 @@
 import numpy as np
-from common.pcc import PCCSeg2D
-from tasks.arm2d.model_2d import seg_circle_nearest
+from common.pcc import PCCSegment2D
+from tasks.arm2d.physics_2d import CircleObstacle, detect_collision_event, summarize_contacts
 
 np.set_printoptions(precision=6, suppress=True)
 
-# helper to build a segment with given curvature and sweep angle
-def make_seg(k, total_ang, p_start=np.array([0.0, 0.0])):
-    if abs(k) < 1e-9:
-        L = 1.0
-    else:
-        L = total_ang / k
-    seg = PCCSeg2D(L=L, kappa=k, p_start=p_start.copy())
-    return seg
+def make_segment(kappa: float, length: float = 10.0) -> PCCSegment2D:
+    return PCCSegment2D(length=length, kappa=kappa)
 
 
-def run_case(name, seg, c, r):
+def run_case(name, segment, center, radius, arm_radius=1.0):
     print(f"\n--- {name} ---")
-    print("seg.p_start=", seg.p_start)
-    print("seg.p_end=", seg.p_end)
-    print("seg.center=", seg.center, "R=", abs(1.0/seg.kappa) if abs(seg.kappa)>1e-12 else None)
-    print("obstacle center=", c, "r=", r)
-    res = seg_circle_nearest(seg, c, r)
-    print("result=", res)
+    print("segment.start=", segment.start_position)
+    print("segment.end=", segment.end_position)
+    obstacle = CircleObstacle(center=np.asarray(center, dtype=float), radius=radius)
+    event = detect_collision_event(
+        segment=segment,
+        obstacle=obstacle,
+        obstacle_index=0,
+        segment_index=0,
+        arm_radius=arm_radius,
+    )
+    print("obstacle center=", obstacle.center, "r=", obstacle.radius, "arm_radius=", arm_radius)
+    print("event=", event)
+    summary = summarize_contacts(
+        segments=[segment],
+        obstacles=[obstacle],
+        arm_radius=arm_radius,
+        collision_events=[] if event is None else [event],
+    )
+    print("contact_summary=", summary)
 
 
-if __name__ == '__main__':
-    # Case A: no collision (far away)
-    seg = make_seg(0.2, np.pi/2)
-    c_far = seg.center + np.array([20.0, 0.0])
-    r = 1.0
-    run_case("No collision (far)", seg, c_far, r)
+if __name__ == "__main__":
+    segment = make_segment(0.0, length=12.0)
+    run_case("No collision", segment, center=np.array([30.0, 0.0]), radius=2.0)
 
-    # Case B: tangent external
-    seg = make_seg(0.2, np.pi/2)
-    R = abs(1.0/seg.kappa)
-    vec_mid = (seg.p_end + seg.p_start) / 2.0 - seg.center
-    ndir = vec_mid / (np.linalg.norm(vec_mid) + 1e-12)
-    r = 1.0
-    c_tangent = seg.center + ndir * (R + r)
-    run_case("Tangent external", seg, c_tangent, r)
+    segment = make_segment(0.0, length=12.0)
+    run_case("Straight segment collision", segment, center=np.array([8.0, 1.0]), radius=2.2)
 
-    # Case C: intersecting (overlap)
-    seg = make_seg(0.2, np.pi/2)
-    R = abs(1.0/seg.kappa)
-    ndir = ((seg.p_end + seg.p_start) / 2.0 - seg.center)
-    ndir = ndir / (np.linalg.norm(ndir) + 1e-12)
-    r = 1.5
-    c_inter = seg.center + ndir * (R + r - 0.5)
-    run_case("Intersecting", seg, c_inter, r)
-
-    # Case D: endpoint inside
-    seg = make_seg(0.2, np.pi/2)
-    r = 2.0
-    c_end = seg.p_end.copy()
-    run_case("Endpoint inside", seg, c_end, r)
-
-    # Case E: centers coincide, r >= R
-    seg = make_seg(0.2, np.pi/2)
-    r = abs(1.0/seg.kappa) + 0.5
-    c_coincide = seg.center.copy()
-    run_case("Centers coincide covers circle", seg, c_coincide, r)
+    segment = make_segment(0.12, length=14.0)
+    run_case("Curved segment collision", segment, center=np.array([11.0, 2.5]), radius=2.0)

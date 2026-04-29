@@ -4,5 +4,9 @@ channels:
 dependencies:
   - python=3.10
   - numpy
+  - scipy
   - gymnasium>=0.29
   - matplotlib
+  # 新增强化学习依赖
+  - stable-baselines3
+  - tensorboard
