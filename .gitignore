@@ -7,7 +7,3 @@ models/
 .idea/
 *.zip
 *.npz
-tdcrGit/
-data/
-*.cpython-310.pyc
-__pycache__/
