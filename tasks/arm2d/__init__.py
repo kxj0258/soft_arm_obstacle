@@ -1,3 +1,4 @@
+from .apf_controller import APFController2D, APFController2DConfig
 from .config import (
     Observation2DConfig,
     Render2DConfig,
@@ -6,6 +7,7 @@ from .config import (
     TendonControl2DConfig,
 )
 from .env_2d import SoftArmObstacle2DEnv
+from .model_based_cem import ModelBasedCEMConfig, ModelBasedCEMController
 from .model_2d import ArmModel2D, ArmModel2DConfig
 from .physics_2d import (
     CircleObstacle,
@@ -25,6 +27,8 @@ from .sim_2d import (
 )
 
 __all__ = [
+    "APFController2D",
+    "APFController2DConfig",
     "ArmModel2D",
     "ArmModel2DConfig",
     "CircleObstacle",
@@ -32,6 +36,8 @@ __all__ = [
     "CollisionEvent",
     "ContactResponse2DConfig",
     "ContactSummary",
+    "ModelBasedCEMConfig",
+    "ModelBasedCEMController",
     "Observation2DConfig",
     "PRESET_SCENARIOS",
     "Render2DConfig",

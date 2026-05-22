@@ -94,24 +94,40 @@ class ArmModel2DTests(unittest.TestCase):
         self.assertTrue(np.isfinite(points).all())
 
     @unittest.skipUnless(SCIPY_AVAILABLE, "scipy is required for the optimization contact backend")
-    def test_optimization_contact_backend_preserves_control_segment_means(self) -> None:
+    def test_optimization_contact_backend_preserves_segment_tendon_lengths(self) -> None:
         config = ArmModel2DConfig(
             segment_lengths=(9.0, 12.0),
             curvature_limit=0.12,
+            tendon_rest_length=10.0,
+            tendon_routing_radius=0.5,
             contact_response=ContactResponse2DConfig(
                 backend="optimization",
                 optimization_subsegments_per_segment=4,
                 fallback_to_heuristic=False,
             ),
         )
-        free_kappas = np.array([0.06, -0.04], dtype=float)
-        model = ArmModel2D(config=config, obstacles=[], kappas=free_kappas)
+        tendon_lengths = np.array([[9.9, 10.5], [10.7, 10.1]], dtype=float)
+        model = ArmModel2D(config=config, obstacles=[], tendon_lengths=tendon_lengths)
         self.assertEqual(model.contact_backend_used, "optimization")
         self.assertEqual(len(model.observed_segments), 8)
         self.assertFalse(model.contact_summary.active)
-        observed_kappas = np.array([segment.kappa for segment in model.observed_segments], dtype=float)
-        np.testing.assert_allclose(np.mean(observed_kappas[:4]), free_kappas[0], atol=1e-5)
-        np.testing.assert_allclose(np.mean(observed_kappas[4:]), free_kappas[1], atol=1e-5)
+        self.assertEqual(model.contact_backend_details["reason"], "no_local_obstacles_near_free_shape")
+        self.assertEqual(model.contact_backend_details["constraint_mode"], "segment_tendon_length_differential")
+        for segment_index, segment_slice in enumerate(model._observed_control_slices or ()):
+            control_segments = model.observed_segments[segment_slice]
+            original_length = config.segment_lengths[segment_index]
+            neutral_tendon_length = float(np.mean(model.free_tendon_lengths[segment_index]))
+            left_total = 0.0
+            right_total = 0.0
+            for segment in control_segments:
+                rest = neutral_tendon_length * (segment.length / original_length)
+                left_total += rest - config.tendon_routing_radius * segment.length * segment.kappa
+                right_total += rest + config.tendon_routing_radius * segment.length * segment.kappa
+            np.testing.assert_allclose(
+                np.array([left_total, right_total], dtype=float),
+                model.free_tendon_lengths[segment_index],
+                atol=1e-5,
+            )
         self.assertEqual(model.contact_summary.segment_clearances.shape, (2,))
 
     @unittest.skipUnless(SCIPY_AVAILABLE, "scipy is required for the optimization contact backend")
@@ -133,6 +149,7 @@ class ArmModel2DTests(unittest.TestCase):
         self.assertEqual(model.contact_backend_used, "optimization")
         self.assertGreaterEqual(model.contact_summary.min_clearance, -1e-4)
         self.assertIn(model.contact_summary.contact_state, {"constrained", "free", "latched"})
+        self.assertIn("reduced_obstacle_count", model.contact_backend_details)
 
 
 if __name__ == "__main__":

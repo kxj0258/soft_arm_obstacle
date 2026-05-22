@@ -13,6 +13,8 @@ import numpy as np
 matplotlib.use("Agg")
 
 from tasks.arm2d import (
+    ModelBasedCEMConfig,
+    ModelBasedCEMController,
     Observation2DConfig,
     Render2DConfig,
     Scenario2D,
@@ -35,6 +37,7 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
         obs_b, info_b = env.reset(seed=123)
         np.testing.assert_allclose(obs_a, obs_b)
         np.testing.assert_allclose(info_a["target_position"], info_b["target_position"])
+        self.assertAlmostEqual(info_a["target_angle"], info_b["target_angle"], places=6)
         env.close()
 
     def test_step_contract_and_truncation(self) -> None:
@@ -51,8 +54,43 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
         self.assertIn("contact_summary", info)
         self.assertIn("evaluation_metrics", info)
         self.assertIn("contact_backend", info)
+        self.assertIn("contact_backend_details", info)
         self.assertIn("tendon_lengths", info)
         self.assertIn("path_length", info["evaluation_metrics"])
+        env.close()
+
+    def test_sim_config_exposes_valid_decimation(self) -> None:
+        config = SoftArmSim2DConfig(sim_dt=0.001, control_dt=0.02)
+        self.assertEqual(config.decimation, 20)
+
+    def test_decimation_one_matches_legacy_reward_decomposition(self) -> None:
+        env = SoftArmObstacle2DEnv(
+            render_mode=None,
+            sim_config=SoftArmSim2DConfig(obstacle_count=0, sim_dt=0.02, control_dt=0.02),
+        )
+        env.reset(seed=0, options={"scenario_name": "reach_easy"})
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        _, reward, _, _, info = env.step(action)
+        reward_terms = info["reward_terms"]
+        recomposed_reward = (
+            float(reward_terms["process_total"])
+            + float(reward_terms["terminal_total"])
+        )
+        self.assertAlmostEqual(reward, recomposed_reward, places=7)
+        self.assertEqual(int(info["contact_summary"]["micro_step_count"]), 1)
+        env.close()
+
+    def test_contact_summary_reports_occurrence_rate_with_decimation(self) -> None:
+        env = SoftArmObstacle2DEnv(
+            render_mode=None,
+            sim_config=SoftArmSim2DConfig(sim_dt=0.001, control_dt=0.01),
+        )
+        env.reset(seed=0, options={"scenario_name": "contact_left"})
+        _, _, _, _, info = env.step(np.zeros(env.action_space.shape, dtype=np.float32))
+        self.assertIn("contact_occurrence_rate", info["contact_summary"])
+        self.assertGreaterEqual(float(info["contact_summary"]["contact_occurrence_rate"]), 0.0)
+        self.assertLessEqual(float(info["contact_summary"]["contact_occurrence_rate"]), 1.0)
+        self.assertEqual(int(info["contact_summary"]["micro_step_count"]), 10)
         env.close()
 
     def test_custom_env_config_changes_action_and_observation_shapes(self) -> None:
@@ -76,12 +114,14 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
         scenario = Scenario2D(
             obstacles=[(12.0, 4.0, 2.5)],
             target=(20.0, 0.0),
+            target_angle=0.25,
             base_x=1.0,
             kappas=np.array([0.05, -0.03]),
         )
         observation, info = env.reset(seed=0, options={"scenario": scenario})
         self.assertAlmostEqual(info["base_x"], 1.0, places=6)
         np.testing.assert_allclose(info["target_position"], np.array([20.0, 0.0]))
+        self.assertAlmostEqual(info["target_angle"], 0.25, places=6)
         self.assertEqual(observation.shape, env.observation_space.shape)
         env.close()
 
@@ -106,8 +146,44 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
         self.assertIn("contact_progress_bonus", info["reward_terms"])
         self.assertIn("idle_contact_penalty", info["reward_terms"])
         self.assertIn("overlap_penalty", info["reward_terms"])
+        self.assertIn("angle_progress", info["reward_terms"])
+        self.assertIn("angle_error", info["reward_terms"])
         self.assertIn("evaluation_metrics", info)
         self.assertIn("contact_ratio", info["evaluation_metrics"])
+        env.close()
+
+    def test_pose_goal_requires_orientation_alignment(self) -> None:
+        env = SoftArmObstacle2DEnv(render_mode=None, sim_config=SoftArmSim2DConfig(obstacle_count=0))
+        scenario = Scenario2D(
+            obstacles=[],
+            target=(20.0, 0.0),
+            target_angle=np.pi / 2.0,
+            base_x=0.0,
+            kappas=np.zeros(2, dtype=float),
+        )
+        env.reset(seed=0, options={"scenario": scenario})
+        action = np.array([-1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        _, _, terminated, _, info = env.step(action)
+        self.assertFalse(terminated)
+        self.assertFalse(info["success"])
+        self.assertGreater(abs(info["angle_error_to_target"]), info["target_angle_tolerance"])
+        env.close()
+
+    def test_pose_goal_succeeds_when_position_and_orientation_match(self) -> None:
+        env = SoftArmObstacle2DEnv(render_mode=None, sim_config=SoftArmSim2DConfig(obstacle_count=0))
+        scenario = Scenario2D(
+            obstacles=[],
+            target=(20.0, 0.0),
+            target_angle=0.0,
+            base_x=0.0,
+            kappas=np.zeros(2, dtype=float),
+        )
+        env.reset(seed=0, options={"scenario": scenario})
+        action = np.array([-1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        _, _, terminated, _, info = env.step(action)
+        self.assertTrue(terminated)
+        self.assertTrue(info["success"])
+        self.assertLessEqual(abs(info["angle_error_to_target"]), info["target_angle_tolerance"])
         env.close()
 
     def test_observation_with_backbone_and_segment_contact_features(self) -> None:
@@ -143,7 +219,11 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
             ),
         )
         observation, info = env.reset(seed=0)
-        self.assertEqual(observation.shape, (18,))
+        expected_dim = env.observation_config.observation_dim(
+            num_kappas=env.num_kappas,
+            max_obstacles=env.max_obstacles,
+        )
+        self.assertEqual(observation.shape, (expected_dim,))
         self.assertEqual(observation.shape, env.observation_space.shape)
         env.close()
 
@@ -198,6 +278,25 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, msg=output)
         self.assertIn("--timesteps", output)
+        self.assertIn("--algorithm", output)
+
+    def test_model_based_controller_returns_valid_action(self) -> None:
+        env = SoftArmObstacle2DEnv(render_mode=None, sim_config=SoftArmSim2DConfig(obstacle_count=0))
+        env.reset(seed=0)
+        controller = ModelBasedCEMController(
+            sim_template=env.sim,
+            control_config=env.control_config,
+            reward_config=env.reward_config,
+            config=ModelBasedCEMConfig(planning_horizon=3, num_candidates=8, num_elites=2, num_iterations=1),
+            seed=0,
+        )
+        action = controller.act(env.sim)
+        self.assertEqual(action.shape, env.action_space.shape)
+        self.assertTrue(np.isfinite(action).all())
+        self.assertTrue(np.all(action >= env.action_space.low))
+        self.assertTrue(np.all(action <= env.action_space.high))
+        self.assertIn("optimization_event_count", controller.last_plan_info)
+        env.close()
 
     def test_train_cli_smoke_runs_without_eval(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -221,6 +320,14 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
                     "relative",
                     "--backbone-points",
                     "5",
+                    "--planning-horizon",
+                    "3",
+                    "--num-candidates",
+                    "8",
+                    "--num-elites",
+                    "2",
+                    "--num-iterations",
+                    "1",
                     "--scenario-name",
                     "reach_easy",
                     "--model-dir",
@@ -238,7 +345,7 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
             output = result.stdout + result.stderr
             self.assertEqual(result.returncode, 0, msg=output)
             self.assertIn("Training finished.", output)
-            self.assertTrue((model_dir / "final_model.zip").exists(), msg=output)
+            self.assertTrue((model_dir / "final_model.mpc.json").exists(), msg=output)
 
     def test_train_cli_subproc_smoke_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -258,6 +365,14 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
                     "16",
                     "--max-episode-steps",
                     "32",
+                    "--planning-horizon",
+                    "3",
+                    "--num-candidates",
+                    "8",
+                    "--num-elites",
+                    "2",
+                    "--num-iterations",
+                    "1",
                     "--scenario-name",
                     "reach_easy",
                     "--model-dir",
@@ -275,7 +390,7 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
             output = result.stdout + result.stderr
             self.assertEqual(result.returncode, 0, msg=output)
             self.assertIn("Training finished.", output)
-            self.assertTrue((model_dir / "final_model.zip").exists(), msg=output)
+            self.assertTrue((model_dir / "final_model.mpc.json").exists(), msg=output)
 
     def test_play_cli_smoke_runs_with_saved_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -295,6 +410,14 @@ class SoftArmObstacle2DEnvTests(unittest.TestCase):
                     "16",
                     "--max-episode-steps",
                     "32",
+                    "--planning-horizon",
+                    "3",
+                    "--num-candidates",
+                    "8",
+                    "--num-elites",
+                    "2",
+                    "--num-iterations",
+                    "1",
                     "--scenario-name",
                     "reach_easy",
                     "--model-dir",

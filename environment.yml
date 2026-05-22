@@ -7,6 +7,7 @@ dependencies:
   - scipy
   - gymnasium>=0.29
   - matplotlib
+  - pygame
   # 新增强化学习依赖
   - stable-baselines3
   - tensorboard

@@ -28,6 +28,7 @@ class TendonControl2DConfig:
     tendon_delta_scale: float = 0.1
     action_low: float = -1.0
     action_high: float = 1.0
+    allow_negative_base_delta: bool = False
 
     def action_dim(self, num_segments: int) -> int:
         return 1 + 2 * int(num_segments)
@@ -47,7 +48,10 @@ class TendonControl2DConfig:
 
     def decode_action(self, action: np.ndarray, num_segments: int) -> tuple[np.ndarray, float, np.ndarray]:
         clipped = self.clip_action(action, num_segments)
-        base_delta = (float(clipped[0]) + 1) * 0.5 * self.base_delta_scale 
+        if self.allow_negative_base_delta:
+            base_delta = float(clipped[0]) * self.base_delta_scale
+        else:
+            base_delta = max(float(clipped[0]), 0.0) * self.base_delta_scale
         tendon_length_deltas = clipped[1:].reshape(num_segments, 2) * self.tendon_delta_scale
         return clipped, base_delta, tendon_length_deltas.astype(np.float64, copy=False)
 
@@ -56,6 +60,8 @@ class TendonControl2DConfig:
 class Reward2DConfig:
     progress_reward_weight: float = 2.0
     distance_reward_weight: float = 0.4
+    angle_progress_reward_weight: float = 0.6
+    angle_error_reward_weight: float = 0.2
     action_penalty_weight: float = 0.01
     time_penalty_weight: float = 0.01
     contact_progress_bonus_weight: float = 0.5
@@ -64,12 +70,31 @@ class Reward2DConfig:
     success_bonus: float = 10.0
     progress_deadband: float = 1e-4
 
-    def compute_terms(
+    def compute_process_terms(
+        self,
+        *,
+        contact_summary,
+        max_reach: float,
+        dt_scale: float = 1.0,
+    ) -> dict[str, float]:
+        reach = max(float(max_reach), 1e-8)
+        scale = max(float(dt_scale), 0.0)
+        overlap_penalty = -self.overlap_penalty_weight * max(-float(contact_summary.min_clearance) / reach, 0.0) * scale
+        time_penalty = -self.time_penalty_weight * scale
+        return {
+            "time_penalty": time_penalty,
+            "overlap_penalty": overlap_penalty,
+            "process_total": time_penalty + overlap_penalty,
+        }
+
+    def compute_terminal_terms(
         self,
         *,
         action: np.ndarray,
         distance: float,
         progress: float,
+        angle_error: float,
+        angle_progress: float,
         success: bool,
         contact_summary,
         max_reach: float,
@@ -77,43 +102,85 @@ class Reward2DConfig:
         reach = max(float(max_reach), 1e-8)
         normalized_progress = float(progress) / reach
         normalized_distance = float(distance) / reach
+        normalized_angle_progress = float(angle_progress) / np.pi
+        normalized_angle_error = abs(float(angle_error)) / np.pi
         action_scale = max(np.sqrt(float(action.size)), 1.0)
         action_penalty = -self.action_penalty_weight * float(np.linalg.norm(action) / action_scale)
         progress_term = self.progress_reward_weight * normalized_progress
         distance_term = -self.distance_reward_weight * normalized_distance
-        time_penalty = -self.time_penalty_weight
-        contact_active = float(contact_summary.active)
+        angle_progress_term = self.angle_progress_reward_weight * normalized_angle_progress
+        angle_error_term = -self.angle_error_reward_weight * normalized_angle_error
+        contact_activity = float(
+            getattr(contact_summary, "contact_occurrence_rate", float(contact_summary.active))
+        )
         positive_progress = max(normalized_progress, 0.0)
-        contact_progress_bonus = self.contact_progress_bonus_weight * contact_active * positive_progress
+        contact_progress_bonus = self.contact_progress_bonus_weight * contact_activity * positive_progress
         idle_contact_penalty = (
             -self.idle_contact_penalty_weight
-            if contact_summary.active and normalized_progress <= self.progress_deadband
+            if bool(contact_summary.active) and normalized_progress <= self.progress_deadband
             else 0.0
         )
-        overlap_penalty = -self.overlap_penalty_weight * max(-contact_summary.min_clearance / reach, 0.0)
         success_bonus = self.success_bonus if success else 0.0
         total = (
             progress_term
             + distance_term
+            + angle_progress_term
+            + angle_error_term
             + action_penalty
-            + time_penalty
             + contact_progress_bonus
             + idle_contact_penalty
-            + overlap_penalty
             + success_bonus
         )
         return {
             "progress": progress_term,
             "distance": distance_term,
+            "angle_progress": angle_progress_term,
+            "angle_error": angle_error_term,
             "action_penalty": action_penalty,
-            "time_penalty": time_penalty,
             "contact_progress_bonus": contact_progress_bonus,
             "idle_contact_penalty": idle_contact_penalty,
-            "overlap_penalty": overlap_penalty,
             "success_bonus": success_bonus,
             "normalized_distance": normalized_distance,
             "normalized_progress": normalized_progress,
-            "total": total,
+            "normalized_angle_error": normalized_angle_error,
+            "normalized_angle_progress": normalized_angle_progress,
+            "terminal_total": total,
+        }
+
+    def compute_terms(
+        self,
+        *,
+        action: np.ndarray,
+        distance: float,
+        progress: float,
+        angle_error: float,
+        angle_progress: float,
+        success: bool,
+        contact_summary,
+        max_reach: float,
+    ) -> dict[str, float]:
+        process_terms = self.compute_process_terms(
+            contact_summary=contact_summary,
+            max_reach=max_reach,
+            dt_scale=1.0,
+        )
+        terminal_terms = self.compute_terminal_terms(
+            action=action,
+            distance=distance,
+            progress=progress,
+            angle_error=angle_error,
+            angle_progress=angle_progress,
+            success=success,
+            contact_summary=contact_summary,
+            max_reach=max_reach,
+        )
+        return {
+            **terminal_terms,
+            "time_penalty": process_terms["time_penalty"],
+            "overlap_penalty": process_terms["overlap_penalty"],
+            "process_total": process_terms["process_total"],
+            "terminal_total": terminal_terms["terminal_total"],
+            "total": float(process_terms["process_total"] + terminal_terms["terminal_total"]),
         }
 
 
@@ -121,6 +188,7 @@ class Reward2DConfig:
 class Observation2DConfig:
     mode: str = "hybrid"
     include_target: bool = True
+    include_target_orientation: bool = True
     include_base_x: bool = True
     include_kappas: bool = True
     include_obstacles: bool = True
@@ -134,14 +202,16 @@ class Observation2DConfig:
     high: float = 2.5
 
     def _base_dim(self) -> int:
+        target_position_dim = 2 if self.include_target else 0
+        target_orientation_dim = 2 if (self.include_target and self.include_target_orientation and self.mode != "legacy_v1") else 0
         if self.mode == "legacy_v1":
-            return 3 + (2 if self.include_target else 0)
+            return 3 + target_position_dim
         if self.mode == "absolute":
-            return 4 + (2 if self.include_target else 0)
+            return 4 + target_position_dim + target_orientation_dim
         if self.mode == "relative":
-            return 2 + (2 if self.include_target else 0)
+            return 2 + target_position_dim + target_orientation_dim
         if self.mode == "hybrid":
-            return 4 + (2 if self.include_target else 0)
+            return 4 + target_position_dim + target_orientation_dim
         raise ValueError(f"Unsupported observation mode {self.mode!r}.")
 
     def observation_dim(self, *, num_kappas: int, max_obstacles: int) -> int:
@@ -168,6 +238,7 @@ class Observation2DConfig:
         *,
         tip_state: np.ndarray,
         target: np.ndarray,
+        target_angle: float,
         base_x: float,
         kappas: np.ndarray,
         obstacles,
@@ -184,6 +255,7 @@ class Observation2DConfig:
         tip_angle = float(tip_state[2])
         heading = np.array([np.cos(tip_angle), np.sin(tip_angle)], dtype=np.float32)
         target = np.asarray(target, dtype=np.float32)
+        target_heading = np.array([np.cos(float(target_angle)), np.sin(float(target_angle))], dtype=np.float32)
         target_delta = target - tip_position
         position_scale = max(float(max_reach), 1e-8)
 
@@ -208,14 +280,20 @@ class Observation2DConfig:
             parts = [tip_position_feat, heading]
             if self.include_target:
                 parts.append(target_position_feat)
+                if self.include_target_orientation:
+                    parts.append(target_heading)
         elif self.mode == "relative":
             parts = [heading]
             if self.include_target:
                 parts.insert(0, target_delta_feat)
+                if self.include_target_orientation:
+                    parts.append(target_heading)
         elif self.mode == "hybrid":
             parts = [tip_position_feat, heading]
             if self.include_target:
                 parts.insert(1, target_delta_feat)
+                if self.include_target_orientation:
+                    parts.append(target_heading)
         else:
             raise ValueError(f"Unsupported observation mode {self.mode!r}.")
 
@@ -286,7 +364,7 @@ class Observation2DConfig:
             parts.append(
                 np.array(
                     [
-                        float(contact_summary.active),
+                        float(getattr(contact_summary, "contact_occurrence_rate", float(contact_summary.active))),
                         float(clearance),
                         float(penetration),
                         float(contact_summary.nearest_fraction),
